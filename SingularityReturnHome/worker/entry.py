@@ -11,7 +11,9 @@ Serves the built site from static assets and runs the simulator per request:
                                          at each decision point (AI binding,
                                          model intelligence.llm.DEFAULT_MODELS
                                          ["workers-ai"]) and returns the
-                                         llm_advice events. Advice never changes
+                                         llm_advice events. Calls go through
+                                         the AI Gateway GATEWAY, whose spend
+                                         limit caps the cost. Advice never changes
                                          the run, so these belong to the run
                                          returned by /api/run.
 
@@ -32,6 +34,9 @@ from telemetry.scenarios import SCENARIOS_DIR, scenario_names
 # The simulator and advisor modules are imported per request, not at module
 # load: Worker startup is limited to 1 s.
 MODEL = "@cf/qwen/qwen3.8-27b"  # intelligence.llm.DEFAULT_MODELS["workers-ai"]
+# AI Gateway the model calls go through; its spend limit (USD 10 per 30 days)
+# blocks further calls once reached.
+GATEWAY = "singularos"
 MAX_SEED = 1_000_000
 ADVISOR = {"enabled": True, "backend": "workers-ai", "model": MODEL, "recorded": False, "live": True}
 
@@ -116,8 +121,11 @@ class Default(WorkerEntrypoint):
 
         async def chat(messages, schema):
             try:
-                result = await self.env.AI.run(MODEL, js(workers_ai_payload(config, messages, schema)))
+                result = await self.env.AI.run(MODEL, js(workers_ai_payload(config, messages, schema)),
+                                               js({"gateway": {"id": GATEWAY}}))
             except Exception as e:  # JsException from the binding
+                if "Spend limit exceeded" in str(e):
+                    raise LLMError("the demo's monthly AI budget is used up") from e
                 raise LLMError(f"workers-ai: {e}") from e
             return workers_ai_content(result.to_py())
 

@@ -76,7 +76,10 @@ Python Worker (`worker/entry.py`, bundled with the simulator packages by
 | `GET /api/run?scenario=NAME[&seed=N]` | Runs the scenario in the Worker (random seed if omitted); playback data as written by `export_web`, plus `seed` |
 | `GET /api/advice?scenario=NAME&seed=N` | Re-runs the same scenario and seed, recording each decision context, then asks Workers AI through the Worker's AI binding; returns the `llm_advice` events |
 
-Advice never changes the run, so the advice for a seed belongs to the run
+Model calls go through the AI Gateway `singularos`, which has a spend limit of
+USD 10 per rolling 30 days; once reached, advice reports that the budget is
+used up and the runs continue without it. Advice never changes the run, so the
+advice for a seed belongs to the run
 `/api/run` returned for that seed; the site plays the run while advice is
 requested. Both routes are rate limited per client address (20 runs and 6
 advice requests per minute). The Worker needs the Workers Paid plan: a run
