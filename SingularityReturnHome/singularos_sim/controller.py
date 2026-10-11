@@ -73,6 +73,19 @@ each decision point (orbit triage, recovery plan) with a context dict of
 controller-side information (_advice_context) and its reply is logged as an
 llm_advice event. The reply never changes the command: the deterministic
 decision keeps actuator authority (MISSION.md section 7).
+AI copilot (optional): if a copilot is given, at the recovery plan point
+the controller asks it for a plan instead of using its own. The copilot
+sees controller-side evidence and the text of station advisories, not the
+baseline's decision. Each proposal is checked by plan_validator; rejected
+proposals are fed back (recovery.copilot_max_attempts). An accepted plan is
+executed as legs and the copilot holds authority; otherwise the baseline
+plan is used. Authority returns to the baseline if the copilot's plan
+exhausts its docking retries. Every proposal, verdict and authority change
+is logged. Station advisories reach the controller as messages
+(receive_advisory); the baseline itself does not act on them.
+Coast-in (copilot procedure): from the pre-dock point the aligned thruster
+pair sets a slow velocity toward the dock, then the final approach turns to
+the dock heading without thrust and coasts in.
 Far-range return: from beyond orbital.far_range_m, RETURN first flies
 straight in toward the dock to orbital.far_approach_radius_m at
 orbital.far_transit_speed_m_s, then follows the loop from the route point
@@ -91,7 +104,7 @@ import math
 from collections import deque
 from dataclasses import dataclass
 
-from . import planner
+from . import plan_validator, planner
 from .config import ORBITAL_DEFAULTS, THRUSTER_DIRECTIONS, THRUSTER_NAMES
 from .dynamics import Command, wrap_angle
 from .orbit import mean_motion, natural_accel, orbit_status, station_radius_m
@@ -109,10 +122,12 @@ class Leg:
     name: str = ""
     via: bool = False
     precise: bool = False  # pre-dock stop: arrival checked against the dock axis on averages
+    coast: float | None = None  # coast-in setup: target speed toward the dock (m/s)
 
 
 class Controller:
-    def __init__(self, spec, mission, params, docking, recovery, orbital=None, advisor=None):
+    def __init__(self, spec, mission, params, docking, recovery, orbital=None, advisor=None, copilot=None,
+                 station=None):
         self.spec = spec
         self.params = params
         self.docking = docking
@@ -121,6 +136,11 @@ class Controller:
         self.hold_kind = None  # "station" or "safe_orbit" once HOLD is declared
         self.safe_orbit = None  # active safe-orbit burn
         self.advisor = advisor
+        self.copilot = copilot
+        self.station = station or []
+        self.advisories = []  # station messages received so far
+        self.authority = "baseline"
+        self.coast_since = None
         self.n = mean_motion(spec["orbit_period_s"])
         self.staging = tuple(mission["staging_point_m"])
         self.dock_heading = mission["dock_heading_rad"]
@@ -298,6 +318,8 @@ class Controller:
                 self.final = "HOLD"
                 self.hold_kind = "station"
                 self.events.append({"t": t, "type": "hold_established", "point_m": list(leg.target)})
+        elif leg.coast is not None:
+            return self._coast_setup(t, leg, nav, att)
         elif self._arrived(leg, nav, att):
             if leg.hold_s > 0 and self.hold_started_at is None:
                 self.hold_started_at = t
@@ -347,6 +369,8 @@ class Controller:
                              name="hold point")]
             self.leg_index = 0
             self.events.append({"t": t, "type": "dock_retry_limit", "decision": "HOLD", "hold_point_m": list(self.staging)})
+            if self.authority == "copilot":
+                self._set_authority(t, "baseline", "copilot plan exhausted its docking retries")
         else:
             self.leg_index = next(i for i, l in enumerate(self.legs) if l.name == "pre-dock")
             self.events.append({"t": t, "type": "dock_retry", "retry": self.dock_retries,
@@ -410,7 +434,7 @@ class Controller:
                 return False
             axial, lateral, v_axial, v_lateral = self._dock_axis_frame()
             ok = (
-                abs(axial - r["predock_distance_m"]) <= r["predock_axial_tolerance_m"]
+                abs(axial - math.hypot(*leg.target)) <= r["predock_axial_tolerance_m"]
                 and abs(lateral) <= r["predock_lateral_tolerance_m"]
                 and abs(v_axial) <= r["predock_axial_speed_m_s"]
                 and abs(v_lateral) <= r["predock_lateral_speed_m_s"]
@@ -600,7 +624,10 @@ class Controller:
         window = self.recovery["diag_average_s"]
         pts = [s for s in self.diag["samples"] if s[0] > t - window - 1e-9]
         n = len(pts)
-        return (sum(p[1] for p in pts) / n, sum(p[2] for p in pts) / n, sum(p[3] for p in pts) / n)
+        # Heading is averaged on the circle: near +/-180 deg an arithmetic mean
+        # of e.g. +3.14 and -3.14 would give 0 and flip the measurement axis.
+        heading = math.atan2(sum(math.sin(p[3]) for p in pts), sum(math.cos(p[3]) for p in pts))
+        return (sum(p[1] for p in pts) / n, sum(p[2] for p in pts) / n, heading)
 
     def _investigate(self, t, nav, att):
         r = self.recovery
@@ -612,7 +639,12 @@ class Controller:
         if d["stage"] == "brake":
             self._passive_check(t, nav, att)
             speed = math.hypot(nav.value["vx_m_s"], nav.value["vy_m_s"])
-            if speed <= r["brake_speed_m_s"] or elapsed >= d["brake_timeout"]:
+            timed_out = elapsed >= d["brake_timeout"]
+            if timed_out and self._closing_on_structure(nav) and elapsed < r["brake_hard_limit_factor"] * d["brake_timeout"]:
+                # Never stop braking while drifting toward nearby structure:
+                # the test firings and turns that follow take tens of seconds.
+                timed_out = False
+            if speed <= r["brake_speed_m_s"] or timed_out:
                 # Hold the heading braking ended at, so test pulses fire from a
                 # steady attitude rather than while turning back.
                 d.update(stage="settle", start=t, samples=[], heading=att.value["heading_rad"])
@@ -640,9 +672,16 @@ class Controller:
                     return self._plan(t, nav, att)
                 d["v_before"] = self._mean_velocity(t)
                 d["v_before_t"] = t
-                d.update(stage="pulse", start=t, current=d["queue"].pop(0))
+                self._begin_pulse(t, nav, att, d["queue"].pop(0))
             else:
                 return Command(idle, rate)
+
+        if d["stage"] == "turn":
+            # Turning so the test firing pushes away from nearby structure.
+            err = abs(wrap_angle(d["heading"] - att.value["heading_rad"]))
+            if err > r["diag_turn_tolerance_rad"] or abs(att.value["angular_rate_rad_s"]) > 0.01:
+                return Command(idle, self._rate_command(d["heading"], att))
+            d.update(stage="pulse", start=t)
 
         if d["stage"] == "pulse":
             if t - d["start"] < r["diag_pulse_s"] - 1e-9:
@@ -657,12 +696,52 @@ class Controller:
                 return Command(idle, rate)
             self._finish_pulse(t, nav)
             if d["queue"]:
-                d.update(stage="pulse", start=t, current=d["queue"].pop(0))
+                self._begin_pulse(t, nav, att, d["queue"].pop(0))
+                if d["stage"] == "turn":
+                    return Command(idle, self._rate_command(d["heading"], att))
                 throttle = dict(idle)
                 throttle[d["current"]] = 1.0
                 return Command(throttle, rate)
             return self._plan(t, nav, att)
         return Command(idle, rate)
+
+    def _closing_on_structure(self, nav):
+        """True if moving toward the nearest station component faster than
+        brake_speed while within diag_safe_distance_m of it."""
+        v = nav.value
+        dist, (ux, uy) = self._nearest_structure(v["x_m"], v["y_m"])
+        closing = v["vx_m_s"] * ux + v["vy_m_s"] * uy
+        return dist < self.recovery["diag_safe_distance_m"] and closing > self.recovery["brake_speed_m_s"]
+
+    def _nearest_structure(self, x, y):
+        """Distance and unit direction from (x, y) to the nearest station component."""
+        best = (math.inf, (0.0, 0.0))
+        for c in self.station:
+            px = min(max(x, c["min_m"][0]), c["max_m"][0])
+            py = min(max(y, c["min_m"][1]), c["max_m"][1])
+            d = math.hypot(px - x, py - y)
+            if d < best[0]:
+                best = (d, ((px - x) / d, (py - y) / d) if d > 0 else (0.0, 0.0))
+        return best
+
+    def _begin_pulse(self, t, nav, att, name):
+        """Start a test firing of one thruster. If it would push toward nearby
+        structure, first turn 180 degrees so the same thruster pushes away."""
+        d = self.diag
+        d["current"] = name
+        h = att.value["heading_rad"]
+        dist, (ux, uy) = self._nearest_structure(nav.value["x_m"], nav.value["y_m"])
+        bx, by = THRUSTER_DIRECTIONS[name]
+        c, s = math.cos(h), math.sin(h)
+        push = (c * bx - s * by, s * bx + c * by)
+        if dist < self.recovery["diag_safe_distance_m"] and push[0] * ux + push[1] * uy > 0.2:
+            d["heading"] = wrap_angle(h + math.pi)
+            d.update(stage="turn", start=t)
+            self.events.append({"t": t, "type": "diagnostic_turn", "thruster": name,
+                                "distance_to_structure_m": round(dist, 2)})
+        else:
+            d["heading"] = h
+            d.update(stage="pulse", start=t)
 
     def _natural(self, nav):
         v = nav.value
@@ -790,6 +869,11 @@ class Controller:
         self.pair_heading = None
         self.criteria_met_since = None
 
+        if self.copilot is not None and not approach:
+            command = self._consult_copilot(t, nav, att, assessment, points, fuel_kg)
+            if command is not None:
+                return command
+
         transit = r["transit_max_speed_m_s"]
         decision = assessment["decision"]
         if decision == "RETURN":
@@ -829,6 +913,180 @@ class Controller:
         if self.final == "ABORT":
             return self._abort_brake(t, nav, att)
         return self._fly_legs(t, nav, att)
+
+    # ------------------------------------------------------------- copilot
+
+    def receive_advisory(self, t, advisory):
+        """A station message (communications, not truth). The baseline does
+        not act on it; the copilot reads its text and the validator enforces
+        its structured constraints."""
+        self.advisories.append(advisory)
+        self.events.append({"t": t, "type": "advisory_received", "id": advisory["id"], "text": advisory["text"]})
+
+    def _set_authority(self, t, owner, reason):
+        self.authority = owner
+        self.events.append({"t": t, "type": "authority", "owner": owner, "reason": reason})
+
+    def _predock(self, distance):
+        h = self.dock_heading
+        return (-math.cos(h) * distance, -math.sin(h) * distance)
+
+    def _copilot_context(self, t, nav, fuel_kg):
+        v = nav.value
+        att = self.latest.get("attitude_sensor")
+        return {
+            "t": t,
+            "observed": {"x_m": round(v["x_m"], 2), "y_m": round(v["y_m"], 2),
+                         "vx_m_s": round(v["vx_m_s"], 3), "vy_m_s": round(v["vy_m_s"], 3),
+                         "heading_rad": round(att.value["heading_rad"], 3) if att else None,
+                         "fuel_kg": round(fuel_kg, 3)},
+            "distance_to_dock_m": math.hypot(v["x_m"], v["y_m"]),
+            "health_estimate": {k: round(h, 2) for k, h in self.health.items()},
+            "usable": sorted(self._usable(), key=THRUSTER_NAMES.index),
+            "fuel_reserve_kg": self.recovery["fuel_reserve_kg"],
+            "advisories": [{"id": a["id"], "text": a["text"]} for a in self.advisories],
+        }
+
+    def _validator_context(self, nav, points, fuel_kg):
+        v = nav.value
+        r = self.recovery
+        return {
+            "position_m": (v["x_m"], v["y_m"]),
+            "speed_m_s": math.hypot(v["vx_m_s"], v["vy_m_s"]),
+            "distance_to_dock_m": math.hypot(v["x_m"], v["y_m"]),
+            "predock_m": self._predock(r["predock_distance_m"]),
+            "staging_m": self.staging,
+            "return_points_m": [tuple(p) for p in points],
+            "usable": self._usable(),
+            "health": dict(self.health),
+            "degraded": self._degraded(),
+            "recovery": r,
+            "docking": self.docking,
+            "constraints": [{**c, "advisory": a["id"]} for a in self.advisories for c in a.get("constraints", [])],
+            "station": self.station,
+            "spec": self.spec,
+            "mass_kg": self._mass_estimate(),
+            "fuel_kg": fuel_kg,
+        }
+
+    def _consult_copilot(self, t, nav, att, baseline, points, fuel_kg):
+        """Ask the copilot for a plan; execute it if the validator accepts it.
+        Returns the command, or None to fall back to the baseline plan."""
+        ctx = self._copilot_context(t, nav, fuel_kg)
+        vctx = self._validator_context(nav, points, fuel_kg)
+        self.events.append({"t": t, "type": "baseline_assessment", "decision": baseline["decision"],
+                            "reasons": baseline["reasons"]})
+        history = []
+        for attempt in range(1, self.recovery["copilot_max_attempts"] + 1):
+            try:
+                plan, latency = self.copilot.propose(ctx, history)
+            except Exception as e:  # a copilot failure must not stop the controller
+                self.events.append({"t": t, "type": "copilot_error", "attempt": attempt, "error": f"{type(e).__name__}: {e}"})
+                break
+            verdict = plan_validator.validate_plan(plan, vctx)
+            self.events.append({"t": t, "type": "copilot_proposal", "attempt": attempt, "agent": self.copilot.name,
+                                "latency_s": round(latency, 2), "plan": plan})
+            self.events.append({"t": t, "type": "copilot_verdict", "attempt": attempt, **verdict})
+            if verdict["accepted"]:
+                self._set_authority(t, "copilot", f"plan accepted on attempt {attempt}")
+                return self._adopt_plan(t, nav, att, plan, points, verdict)
+            history.append((plan, verdict["problems"]))
+        if self.advisories and baseline["decision"] == "RETURN":
+            # The baseline cannot interpret station advisories, so its own
+            # return may break them. Fall back to holding at a safe point.
+            self._set_authority(t, "baseline", "no accepted copilot plan while station advisories are active; "
+                                               "holding at a safe point")
+            baseline["decision"] = "HOLD"
+            baseline["reasons"] = list(baseline["reasons"]) + ["copilot plan not accepted under active advisories: hold"]
+            return None
+        self._set_authority(t, "baseline", "no accepted copilot plan; baseline plan used")
+        return None
+
+    def _adopt_plan(self, t, nav, att, plan, points, verdict):
+        r = self.recovery
+        h = self.dock_heading
+        transit = r["transit_max_speed_m_s"]
+        steps = plan["steps"]
+        legs = []
+        # Under an advisory speed limit, fly near-dock legs below it so that
+        # velocity-tracking noise stays inside the limit.
+        caps = [c["value_m_s"] for a in self.advisories for c in a.get("constraints", [])
+                if c["type"] == "max_approach_speed"]
+        cap = min(caps) * r["advisory_speed_margin"] if caps else None
+        limit = (lambda v: v if cap is None else min(v, cap))
+        for i, step in enumerate(steps):
+            a = step["action"]
+            nxt = steps[i + 1]["action"] if i + 1 < len(steps) else None
+            if a == "RETURN_TO_STAGING":
+                legs += [Leg("RETURN", tuple(p), h, transit, name="return point") for p in points]
+                legs.append(Leg("RETURN", self.staging, h, transit, name="staging"))
+            elif a == "GOTO":
+                legs.append(Leg("RETURN", (step["x_m"], step["y_m"]), h, step.get("speed_m_s") or transit,
+                                name="copilot waypoint"))
+            elif a == "PREDOCK_STOP":
+                d = r["coast_predock_distance_m"] if nxt == "COAST_IN" else r["predock_distance_m"]
+                legs.append(Leg("RETURN", self._predock(d), h, limit(step.get("speed_m_s") or r["approach_max_speed_m_s"]),
+                                name="pre-dock", precise=True))
+            elif a == "COAST_IN":
+                pre = legs[-1].target if legs else self._predock(r["coast_predock_distance_m"])
+                speed = max(limit(step["speed_m_s"]), r["coast_min_speed_m_s"])
+                legs.append(Leg("RETURN", pre, h, speed, name="coast setup", coast=speed))
+                legs.append(Leg("APPROACH", (0.0, 0.0), h, limit(r["approach_max_speed_m_s"]), name="dock"))
+            elif a == "FINAL_APPROACH":
+                legs.append(Leg("APPROACH", (0.0, 0.0), h, limit(step.get("speed_m_s") or r["approach_max_speed_m_s"]),
+                                name="dock"))
+            elif a == "HOLD_AT":
+                legs.append(Leg("HOLD", (step["x_m"], step["y_m"]), h, transit, name="hold point"))
+        decision = {"DOCK": "RETURN", "HOLD": "HOLD", "ABORT": "ABORT"}[plan["decision"]]
+        event = {"t": t, "type": "plan", "source": "copilot", "decision": decision,
+                 "reasons": [plan["rationale"]], "return_points_m": [p for p in verdict["path_m"][1:]],
+                 "fuel_needed_kg": verdict["fuel_needed_kg"]}
+        if plan["decision"] == "HOLD":
+            event["hold_point_m"] = [steps[-1]["x_m"], steps[-1]["y_m"]]
+        self.events.append(event)
+        if plan["decision"] == "ABORT":
+            self._start_abort(t)
+            return self._abort_brake(t, nav, att)
+        self.legs = legs
+        self.leg_index = 0
+        return self._fly_legs(t, nav, att)
+
+    def _coast_setup(self, t, leg, nav, att):
+        """Coast-in setup, from rest at the pre-dock point: turn the intact
+        opposing pair exactly onto the dock axis without thrusting, then burn
+        purely along the axis to leg.coast m/s toward the dock, then hand over
+        to the final approach, which turns to the dock heading without thrust
+        and coasts in. Thrusting only when aligned keeps sideways velocity out."""
+        r = self.recovery
+        h_d = self.dock_heading
+        offset = self._pair_axis_offset()
+        h = att.value["heading_rad"]
+        heading = min((wrap_angle(h_d - offset), wrap_angle(h_d - offset + math.pi)),
+                      key=lambda o: abs(wrap_angle(o - h)))
+        rate = self._rate_command(heading, att)
+        if abs(wrap_angle(heading - h)) > r["coast_align_tolerance_rad"]:
+            self.coast_since = None
+            return Command(self._idle(), rate)
+
+        _, lateral, v_axial_avg, _ = self._dock_axis_frame()
+        if abs(-v_axial_avg - leg.coast) <= r["coast_speed_tolerance_m_s"]:
+            if self.coast_since is None:
+                self.coast_since = t
+            if t - self.coast_since >= r["coast_settle_s"] - 1e-9:
+                self.coast_since = None
+                self.events.append({"t": t, "type": "coast_in_set", "speed_m_s": -v_axial_avg, "lateral_offset_m": lateral})
+                self._advance_leg()
+                return self._fly_legs(t, nav, att)
+        else:
+            self.coast_since = None
+        # Burn along the dock axis only (instantaneous velocity), cancelling
+        # the orbital acceleration component along the axis.
+        v = nav.value
+        ix, iy = math.cos(h_d), math.sin(h_d)  # unit vector toward the dock along its axis
+        v_in = v["vx_m_s"] * ix + v["vy_m_s"] * iy
+        nx, ny = natural_accel(self.n, v["x_m"], v["y_m"], v["vx_m_s"], v["vy_m_s"])
+        a_in = self.params["velocity_gain_1_s"] * (leg.coast - v_in) - (nx * ix + ny * iy)
+        return Command(self._allocate(a_in * ix, a_in * iy, att), rate)
 
     # ----------------------------------------------------------- orbit scale
 

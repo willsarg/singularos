@@ -1,0 +1,10 @@
+# AI copilot demo: backward thruster lost (same fault as
+# thruster_fault_infeasible). The baseline cannot dock without both axial
+# thrusters and holds. The manual describes a coast-in procedure; the copilot
+# is expected to find and apply it, and the validator to accept it.
+extends = "thruster_fault_infeasible.toml"
+
+[scenario]
+name = "copilot_coast_in"
+expected_outcome = "HOLD"
+expected_outcome_copilot = "DOCKED"

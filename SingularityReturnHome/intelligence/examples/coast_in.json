@@ -1,0 +1,6 @@
+[{"schema_version": 1,
+  "assessment": "Backward thruster failed (diagnosed by test firing); forward, left and right work. Powered final approach needs both axial thrusters.",
+  "decision": "DOCK",
+  "steps": [{"action": "RETURN_TO_STAGING"}, {"action": "PREDOCK_STOP"}, {"action": "COAST_IN", "speed_m_s": 0.025}],
+  "advisories_considered": [],
+  "rationale": "Coast-in docking per manual: the left/right pair sets a slow drift toward the dock, no braking needed below the 0.05 m/s limit."}]

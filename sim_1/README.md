@@ -1,5 +1,10 @@
 # SingularOS 2D simulator (sim_1)
 
+> **Frozen.** Active development continues in
+> [`SingularityReturnHome/`](../SingularityReturnHome/), which contains this
+> simulator (`singularos_sim/`) extended to orbit scale, plus the LLM advisor.
+> `sim_1/` is kept as a reference and is not updated.
+
 Headless Python simulator for the SingularOS mission (see [MISSION.md](../MISSION.md)).
 It implements build-order steps 1 and 2:
 

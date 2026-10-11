@@ -14,6 +14,9 @@ from singularos_sim.replay import build_replay
 from singularos_sim.runner import DEFAULT_RUNS_DIR, run_scenario
 
 SCENARIOS_DIR = Path(__file__).resolve().parents[1] / "scenarios"
+LAUNCHER = Path(__file__).resolve().parent / "launcher.html"
+REPLAY_TEMPLATE = Path(__file__).resolve().parents[1] / "singularos_sim" / "replay_template.html"
+_copilot = None
 TRACK_PERIOD_S = 1.0
 
 
@@ -47,23 +50,49 @@ def list_scenarios():
     for name in scenario_names():
         config = load_config(SCENARIOS_DIR / f"{name}.toml")
         out.append({"name": name, "expected_outcome": config["scenario"]["expected_outcome"],
-                    "faults": config["faults"]})
+                    "expected_outcome_copilot": config["scenario"]["expected_outcome_copilot"],
+                    "faults": config["faults"],
+                    "advisories": [{"id": a["id"], "text": a["text"]} for a in config["advisories"]]})
     return out
 
 
-def run_dir(name, seed):
-    return DEFAULT_RUNS_DIR / f"{name}-seed{seed}"
+def copilot_agent():
+    """The LLM copilot (created once), or None if the model server is unavailable."""
+    global _copilot
+    if _copilot is None:
+        from intelligence.copilot import CopilotAgent
+        from intelligence.llm import LLMClient
+
+        client = LLMClient()
+        if client.health()["ok"]:
+            _copilot = CopilotAgent(client)
+    return _copilot
 
 
-def ensure_run(name, seed):
-    """Run the scenario unless a finished run for it already exists."""
+def copilot_status():
+    from intelligence.llm import LLMClient
+
+    client = LLMClient()
+    status = client.health()
+    return {"ok": status["ok"], "detail": status["detail"], "model": client.config.model}
+
+
+def run_dir(name, seed, copilot=False):
+    return DEFAULT_RUNS_DIR / f"{name}-{'copilot-' if copilot else ''}seed{seed}"
+
+
+def ensure_run(name, seed, copilot=False, force=False):
+    """Run the scenario unless a finished run for it already exists (or force)."""
     config = with_seed(load_config(SCENARIOS_DIR / f"{name}.toml"), seed)
-    out = run_dir(name, config["scenario"]["seed"])
-    if not (out / "summary.json").exists():
-        run_scenario(config, out)
+    out = run_dir(name, config["scenario"]["seed"], copilot)
+    if force or not (out / "summary.json").exists():
+        agent = copilot_agent() if copilot else None
+        if copilot and agent is None:
+            raise ValueError("AI copilot unavailable: start `ollama serve` and pull the model")
+        run_scenario(config, out, copilot=agent)
         build_replay(out)
-    elif not (out / "replay.html").exists():
-        build_replay(out)
+    elif not (out / "replay.html").exists() or (out / "replay.html").stat().st_mtime < REPLAY_TEMPLATE.stat().st_mtime:
+        build_replay(out)  # missing, or built from an older replay page
     return out
 
 
@@ -105,21 +134,33 @@ class Handler(BaseHTTPRequestHandler):
         seed = None if raw is None else int(raw)
         if seed is not None and not 0 <= seed <= 1_000_000:
             raise ValueError("Seed must be between 0 and 1000000")
-        return name, seed
+        flag = lambda k: query.get(k, ["0"])[0] in ("1", "true", "yes")
+        return name, seed, flag("copilot"), flag("force")
 
     def do_GET(self):
         url = urlsplit(self.path)
         query = parse_qs(url.query)
+        if url.path in ("/", "/index.html"):
+            html = LAUNCHER.read_bytes()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(html)))
+            self.end_headers()
+            self.wfile.write(html)
+            return
         if url.path == "/api/scenarios":
             self.send_json(list_scenarios())
             return
+        if url.path == "/api/copilot":
+            self.send_json(copilot_status())
+            return
         if url.path in ("/api/run", "/api/replay"):
             try:
-                name, seed = self.scenario_args(query)
+                name, seed, copilot, force = self.scenario_args(query)
+                out = ensure_run(name, seed, copilot, force and url.path == "/api/run")
             except ValueError as error:
                 self.send_error(400, str(error))
                 return
-            out = ensure_run(name, seed)
             if url.path == "/api/run":
                 self.send_json(run_report(out))
                 return
@@ -148,5 +189,5 @@ class Handler(BaseHTTPRequestHandler):
 
 if __name__ == "__main__":
     server = ThreadingHTTPServer(("127.0.0.1", 8000), Handler)
-    print("Mission telemetry API: http://127.0.0.1:8000/api/mission", flush=True)
+    print("Scenario launcher: http://127.0.0.1:8000  (API: /api/scenarios, /api/run, /api/replay)", flush=True)
     server.serve_forever()

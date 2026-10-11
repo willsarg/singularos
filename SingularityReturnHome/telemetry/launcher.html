@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Singularity Return Home: scenario launcher</title>
+<style>
+  :root { --bg: #0d1117; --panel: #161b22; --line: #30363d; --text: #e6edf3; --muted: #8b949e; --ok: #3fb950; --bad: #f85149; --obs: #4fc3f7; }
+  * { box-sizing: border-box; }
+  body { margin: 0; height: 100vh; display: grid; grid-template-rows: auto 1fr; background: var(--bg); color: var(--text);
+         font: 13px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  .bar { display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: center; padding: 10px 16px; border-bottom: 1px solid var(--line); background: var(--panel); }
+  h1 { font-size: 15px; margin: 0 8px 0 0; }
+  label { color: var(--muted); display: flex; gap: 6px; align-items: center; }
+  select, input, button { background: #21262d; color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 5px 9px; font: inherit; }
+  select { min-width: 360px; }
+  input[type=number] { width: 80px; }
+  button { cursor: pointer; font-weight: 600; }
+  button.primary { background: #238636; border-color: #2ea043; }
+  button:disabled { opacity: .5; cursor: wait; }
+  #status { color: var(--muted); }
+  #status.bad { color: var(--bad); } #status.ok { color: var(--ok); }
+  #desc { color: var(--muted); font-size: 12px; flex-basis: 100%; }
+  iframe { width: 100%; height: 100%; border: 0; background: var(--bg); }
+  .empty { display: grid; place-items: center; color: var(--muted); }
+</style>
+</head>
+<body>
+<div class="bar">
+  <h1>Singularity Return Home</h1>
+  <label>Scenario <select id="scenario"></select></label>
+  <label><input type="checkbox" id="copilot"> AI copilot (LLM)</label>
+  <label>Seed <input type="number" id="seed" min="0" max="1000000" value="1"></label>
+  <label><input type="checkbox" id="force"> re-run</label>
+  <button class="primary" id="run">Run &amp; play</button>
+  <span id="status">Pick a scenario and press Run.</span>
+  <div id="desc"></div>
+</div>
+<div id="view" class="empty">The replay appears here.</div>
+
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  let scenarios = [];
+  const faultText = s => {
+    const lost = s.faults.filter(f => f.type === "thruster" && f.effectiveness === 0).map(f => f.thruster);
+    const weak = s.faults.filter(f => f.type === "thruster" && f.effectiveness > 0).map(f => `${f.thruster} at ${Math.round(100 * f.effectiveness)}%`);
+    const strike = s.faults.filter(f => f.type === "impact" && Math.hypot(...f.delta_v_m_s) >= 10).map(f => `${Math.round(Math.hypot(...f.delta_v_m_s))} m/s strike`);
+    return [...(lost.length ? [`${lost.join("+")} lost`] : []), ...weak, ...strike].join(", ") || "no faults";
+  };
+  function describe() {
+    const s = scenarios.find(x => x.name === $("scenario").value);
+    if (!s) return;
+    const cp = $("copilot").checked;
+    const exp = cp ? s.expected_outcome_copilot : s.expected_outcome;
+    let text = `Faults: ${faultText(s)}. Expected outcome ${cp ? "with the AI copilot" : "for the baseline"}: ${exp}.`;
+    if (s.advisories.length) text += ` Station advisories: ${s.advisories.map(a => `[${a.id}] ${a.text}`).join(" ")}`;
+    if (cp) text += " The LLM takes about 10 s per proposal.";
+    $("desc").textContent = text;
+  }
+  async function load() {
+    scenarios = await (await fetch("/api/scenarios")).json();
+    // Copilot demos first, then the rest.
+    scenarios.sort((a, b) => (b.name.startsWith("copilot_") - a.name.startsWith("copilot_")) || a.name.localeCompare(b.name));
+    $("scenario").innerHTML = scenarios.map(s =>
+      `<option value="${s.name}">${s.name} — ${faultText(s)}</option>`).join("");
+    const llm = await (await fetch("/api/copilot")).json();
+    if (!llm.ok) { $("copilot").disabled = true; $("copilot").parentElement.title = llm.detail; }
+    $("copilot").parentElement.lastChild.textContent = llm.ok ? " AI copilot (LLM)" : " AI copilot (LLM unavailable)";
+    const name = $("scenario").value;
+    if (name.startsWith("copilot_")) $("copilot").checked = llm.ok;
+    describe();
+  }
+  $("scenario").addEventListener("change", () => {
+    if ($("scenario").value.startsWith("copilot_") && !$("copilot").disabled) $("copilot").checked = true;
+    describe();
+  });
+  $("copilot").addEventListener("change", describe);
+  $("run").addEventListener("click", async () => {
+    const q = new URLSearchParams({ scenario: $("scenario").value, seed: $("seed").value || "1" });
+    if ($("copilot").checked) q.set("copilot", "1");
+    if ($("force").checked) q.set("force", "1");
+    $("run").disabled = true;
+    $("status").className = "";
+    $("status").textContent = $("copilot").checked ? "Running with the AI copilot (the LLM is thinking)..." : "Running...";
+    const t0 = performance.now();
+    try {
+      const res = await fetch("/api/run?" + q);
+      if (!res.ok) throw new Error(await res.text());
+      const r = await res.json();
+      const s = r.summary;
+      const pass = s.outcome === s.expected_outcome && !s.collision && !(s.advisory_violations || []).length
+        && (s.outcome !== "DOCKED" || s.truth_docking_check.pass);
+      $("status").className = pass ? "ok" : "bad";
+      $("status").textContent = `${s.mode === "copilot" ? "AI copilot" : "Baseline"}: ${s.outcome} (expected ${s.expected_outcome}) — ${pass ? "PASS" : "FAIL"}`
+        + ` · ${((performance.now() - t0) / 1000).toFixed(1)} s`;
+      q.delete("force");
+      q.set("autoplay", "1");
+      $("view").className = "";
+      $("view").innerHTML = `<iframe src="/api/replay?${q}"></iframe>`;
+    } catch (err) {
+      $("status").className = "bad";
+      $("status").textContent = "Run failed: " + err.message.slice(0, 200);
+    } finally {
+      $("run").disabled = false;
+    }
+  });
+  load();
+})();
+</script>
+</body>
+</html>

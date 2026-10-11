@@ -64,6 +64,8 @@ def load_config(path):
     config.setdefault("faults", [])
     config["scenario"].setdefault("expected_outcome", "DOCKED")
     config["scenario"].setdefault("post_outcome_observe_s", 0.0)
+    config["scenario"].setdefault("expected_outcome_copilot", config["scenario"]["expected_outcome"])
+    config.setdefault("advisories", [])
     config["orbital"] = {**ORBITAL_DEFAULTS, **config.get("orbital", {})}
     validate_config(config)
     return config
@@ -107,6 +109,15 @@ def validate_config(config):
             raise ValueError(f"station component {c['name']}: min_m must be below max_m")
     if config["orbit"]["period_s"] <= 0:
         raise ValueError("orbit.period_s must be positive")
+    for i, adv in enumerate(config["advisories"]):
+        for key in ("id", "t_s", "text"):
+            if key not in adv:
+                raise ValueError(f"advisories[{i}] requires {key}")
+        for c in adv.get("constraints", []):
+            if c["type"] not in ("max_approach_speed", "dock_closed", "keep_out"):
+                raise ValueError(f"advisories[{i}]: unknown constraint type {c['type']!r}")
+    if config["scenario"]["expected_outcome_copilot"] not in OUTCOMES:
+        raise ValueError(f"scenario.expected_outcome_copilot must be one of {OUTCOMES}")
     if config["scenario"]["expected_outcome"] not in OUTCOMES:
         raise ValueError(f"scenario.expected_outcome must be one of {OUTCOMES}")
     for i, fault in enumerate(config["faults"]):

@@ -25,7 +25,8 @@
   .badge.bad { background: rgba(248,81,73,.15); color: var(--bad); }
   main { display: grid; grid-template-columns: 1fr 392px; min-height: 0; }
   #world-wrap { position: relative; min-width: 0; min-height: 0; }
-  #world { position: absolute; inset: 0; width: 100%; height: 100%; }
+  #world { position: absolute; inset: 0; width: 100%; height: 100%; cursor: grab; }
+  #world.dragging { cursor: grabbing; }
   aside { border-left: 1px solid var(--line); background: var(--panel); padding: 12px 14px; overflow-y: auto; }
   h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 14px 0 6px; font-weight: 600; }
   h2:first-child { margin-top: 0; }
@@ -104,6 +105,15 @@
   .meter > div { height: 100%; }
   .meter > i { position: absolute; top: -1px; bottom: -1px; width: 1px; background: var(--text); opacity: .6; }
   #schematic { width: 100%; height: 112px; display: block; margin-top: 10px; }
+  .cp-head { display: flex; justify-content: space-between; align-items: center; margin: 2px 0 6px; }
+  .cp-msg { border-left: 3px solid #4fa3e0; background: rgba(79,163,224,.08); padding: 4px 8px; margin: 4px 0; font-size: 12px; }
+  .cp-msg b { color: #4fa3e0; font-size: 11px; }
+  .cp-att { border: 1px solid var(--line); border-radius: 4px; padding: 6px 8px; margin: 6px 0; font-size: 12px; }
+  .cp-att.ok { border-color: rgba(63,185,80,.5); } .cp-att.bad { border-color: rgba(248,81,73,.5); }
+  .cp-att .steps { margin: 4px 0; display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+  .cp-att .steps i { color: var(--muted); font-style: normal; }
+  .cp-att .why { color: var(--muted); font-size: 11px; margin-top: 3px; }
+  .cp-att ul { margin: 4px 0 0 16px; padding: 0; color: var(--bad); font-size: 11px; }
   details { border-top: 1px solid var(--line); margin-top: 12px; padding-top: 2px; }
   details > summary { cursor: pointer; font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); font-weight: 600; padding: 6px 0; list-style: none; }
   details > summary::before { content: "\25B8"; display: inline-block; width: 14px; }
@@ -129,6 +139,14 @@
     </div>
     <div class="alarm nominal" id="alarm"></div>
     <div class="analyst" id="analyst"></div>
+
+    <section id="copilot-sec" hidden>
+      <h2>AI copilot</h2>
+      <div class="cp-head"><span class="note">Actuator authority</span><span id="cp-auth"></span></div>
+      <div id="cp-msgs"></div>
+      <div id="cp-body"></div>
+      <div class="note">The copilot (LLM) proposes; a deterministic validator checks capability, speeds, clearance, advisories and fuel. Only an accepted plan is flown; otherwise the baseline keeps control.</div>
+    </section>
 
     <h2>Relative navigation &middot; LVLH</h2>
     <div class="nav" id="relnav"></div>
@@ -183,11 +201,17 @@
         <option value="20" selected>20&times;</option><option value="50">50&times;</option>
       </select>
     </label>
+    <label class="note">View
+      <select id="cam" title="Camera">
+        <option value="auto" selected>Auto</option><option value="station">Station</option>
+        <option value="craft">Follow craft</option><option value="path">Whole path</option>
+      </select>
+    </label>
     <input type="range" id="scrub" min="0" step="0.001">
     <span class="clock" id="tlabel"></span>
   </div>
   <div id="timeline"><div id="cursor"></div></div>
-  <div class="note">Space: play/pause. Left/Right: step one controller tick. Click the phase bar to jump. Add ?t=SECONDS to the URL to open at a given time.</div>
+  <div class="note">Scroll to zoom, drag to pan, double-click to reset the view. Space: play/pause. Left/Right: step one controller tick. Click the phase bar to jump. Add ?t=SECONDS to the URL to open at a given time.</div>
 </footer>
 
 <script id="data" type="application/json">__REPLAY_DATA__</script>
@@ -224,7 +248,7 @@
 
   // Header
   const S = D.summary;
-  $("meta").textContent = `${S.scenario} \u00b7 seed ${S.seed} \u00b7 ${S.sim_time_s.toFixed(1)} s \u00b7 fuel ${S.fuel_used_kg.toFixed(3)} kg`;
+  $("meta").textContent = `${S.mode === "copilot" ? "AI COPILOT \u00b7 " : ""}${S.scenario} \u00b7 seed ${S.seed} \u00b7 ${S.sim_time_s.toFixed(1)} s \u00b7 fuel ${S.fuel_used_kg.toFixed(3)} kg`;
   const ok = S.outcome === "DOCKED" && S.truth_docking_check.pass;
   $("outcome").textContent = S.outcome + (S.outcome === "DOCKED" ? (S.truth_docking_check.pass ? " (truth confirmed)" : " (truth check FAILED)") : "");
   const pass = S.outcome === S.expected_outcome && !S.collision && (S.outcome !== "DOCKED" || S.truth_docking_check.pass);
@@ -239,7 +263,7 @@
     const sel = $("scenario");
     sel.hidden = false;
     sel.innerHTML = D.scenarios.map(sc =>
-      `<option value="${sc.href}" ${sc.name === S.scenario ? "selected" : ""}>${sc.label}</option>`).join("");
+      `<option value="${sc.href}" ${location.pathname.endsWith(sc.href.replace("../", "/")) ? "selected" : ""}>${sc.label}</option>`).join("");
     sel.addEventListener("change", () => { location.href = sel.value; });
   }
 
@@ -273,6 +297,35 @@
     }
     render();
   });
+
+  // Camera interaction.
+  const worldCv = $("world");
+  $("cam").addEventListener("change", e => { cam.mode = e.target.value; cam.zoom = 1; cam.panX = cam.panY = 0; render(); });
+  worldCv.addEventListener("wheel", e => {
+    e.preventDefault();
+    if (!cam.last) return;
+    const { v, cx, cy, w, h, baseCx, baseCy } = cam.last;
+    const r = worldCv.getBoundingClientRect(), px = e.clientX - r.left, py = e.clientY - r.top;
+    // World point under the cursor stays put while zooming.
+    const wx = cx + (px - w / 2) / v.s, wy = cy - (py - h / 2) / v.s;
+    const f = Math.exp(-e.deltaY * 0.0015);
+    cam.zoom = Math.min(Math.max(cam.zoom * f, 1e-3), 1e6);
+    const s2 = v.s * f;
+    cam.panX = wx - (px - w / 2) / s2 - baseCx;
+    cam.panY = wy + (py - h / 2) / s2 - baseCy;
+    render();
+  }, { passive: false });
+  let drag = null;
+  worldCv.addEventListener("mousedown", e => { drag = { x: e.clientX, y: e.clientY }; worldCv.classList.add("dragging"); });
+  window.addEventListener("mouseup", () => { drag = null; worldCv.classList.remove("dragging"); });
+  window.addEventListener("mousemove", e => {
+    if (!drag || !cam.last) return;
+    cam.panX -= (e.clientX - drag.x) / cam.last.v.s;
+    cam.panY += (e.clientY - drag.y) / cam.last.v.s;
+    drag = { x: e.clientX, y: e.clientY };
+    render();
+  });
+  worldCv.addEventListener("dblclick", () => { cam.zoom = 1; cam.panX = cam.panY = 0; render(); });
 
   const scrub = $("scrub");
   scrub.max = tEnd;
@@ -445,9 +498,9 @@
         g.fillStyle = "#c9d1d9"; g.font = "11px system-ui, sans-serif";
         const tw = g.measureText(c.name).width;
         if (H > 2 * W) {
-          g.save(); g.translate(X0 + W / 2 + 4, Y1 + H / 2 + tw / 2); g.rotate(-Math.PI / 2); g.fillText(c.name, 0, 0); g.restore();
+          if (stationPixels(v) >= 160) { g.save(); g.translate(X0 + W / 2 + 4, Y1 + H / 2 + tw / 2); g.rotate(-Math.PI / 2); g.fillText(c.name, 0, 0); g.restore(); }
         } else {
-          g.fillText(c.name, X0 + W / 2 - tw / 2, Y1 + H / 2 + 4);
+          if (stationPixels(v) >= 160) g.fillText(c.name, X0 + W / 2 - tw / 2, Y1 + H / 2 + 4);
         }
       }
     }
@@ -463,9 +516,63 @@
   const pad = 0.08 * Math.max(maxx - minx, maxy - miny);
   minx -= pad; maxx += pad; miny -= pad; maxy += pad;
 
+  // Camera. Bounds are [minx, maxx, miny, maxy] in metres.
+  //   station: station and route only (the close-up view)
+  //   path:    the whole truth path
+  //   auto:    station plus the craft's current position, so the view widens
+  //            smoothly as the craft leaves and closes in again on return
+  //   craft:   centred on the craft
+  // Scroll zoom and drag pan apply on top of any mode; double-click resets.
+  const STATION_B = (() => {
+    let a = [-6, 2, -4, 4];
+    for (const p of pts) a = [Math.min(a[0], p[0]), Math.max(a[1], p[0]), Math.min(a[2], p[1]), Math.max(a[3], p[1])];
+    const pd = 0.08 * Math.max(a[1] - a[0], a[3] - a[2]);
+    return [a[0] - pd, a[1] + pd, a[2] - pd, a[3] + pd];
+  })();
+  const cam = { mode: "auto", zoom: 1, panX: 0, panY: 0, last: null };
+  function camBounds(pose) {
+    if (cam.mode === "station") return STATION_B;
+    if (cam.mode === "path") return [minx, maxx, miny, maxy];
+    if (cam.mode === "craft") return [pose.x - 40, pose.x + 40, pose.y - 30, pose.y + 30];
+    const b = [Math.min(STATION_B[0], pose.x), Math.max(STATION_B[1], pose.x),
+               Math.min(STATION_B[2], pose.y), Math.max(STATION_B[3], pose.y)];
+    const pd = 0.12 * Math.max(b[1] - b[0] - (STATION_B[1] - STATION_B[0]), b[3] - b[2] - (STATION_B[3] - STATION_B[2]));
+    return [b[0] - pd, b[1] + pd, b[2] - pd, b[3] + pd];
+  }
+  function camera(w, h, pose) {
+    const b = camBounds(pose);
+    const cx = (b[0] + b[1]) / 2 + cam.panX, cy = (b[2] + b[3]) / 2 + cam.panY;
+    const hx = (b[1] - b[0]) / 2 / cam.zoom, hy = (b[3] - b[2]) / 2 / cam.zoom;
+    const v = view(w, h, cx - hx, cx + hx, cy - hy, cy + hy);
+    cam.last = { v, cx, cy, w, h, baseCx: (b[0] + b[1]) / 2, baseCy: (b[2] + b[3]) / 2 };
+    return v;
+  }
+  function stationPixels(v) { return (STATION_B[1] - STATION_B[0]) * v.s; }
+
+  // Earth's surface and the reentry altitude, drawn when the view is large
+  // enough for them to matter. Earth's centre is at (-R, 0) in the station frame.
+  const MU = 3.986004418e14, RE = 6378137.0, REENTRY = 120e3;
+  const R_ST = Math.cbrt(MU / Math.pow(2 * Math.PI / D.orbit_period_s, 2));
+  function drawEarth(g, v, w, h) {
+    if (w / v.s < 5000) return;
+    const cx = v.X(-R_ST), cy = v.Y(0);
+    g.save();
+    g.fillStyle = "rgba(40,90,160,0.18)"; g.strokeStyle = "rgba(79,163,224,0.8)"; g.lineWidth = 1.5;
+    g.beginPath(); g.arc(cx, cy, RE * v.s, 0, 2 * Math.PI); g.fill(); g.stroke();
+    g.setLineDash([6, 5]); g.strokeStyle = "rgba(248,81,73,0.7)";
+    g.beginPath(); g.arc(cx, cy, (RE + REENTRY) * v.s, 0, 2 * Math.PI); g.stroke(); g.setLineDash([]);
+    // Labels where the circles cross the station's radial line.
+    g.font = "11px system-ui, sans-serif"; g.fillStyle = "rgba(248,81,73,0.9)";
+    g.fillText("reentry altitude 120 km", v.X(RE + REENTRY - R_ST) + 6, v.Y(0) - 6);
+    g.fillStyle = "rgba(79,163,224,0.95)";
+    g.fillText(`Earth's surface (station altitude ${((R_ST - RE) / 1000).toFixed(0)} km)`, v.X(RE - R_ST) + 6, v.Y(0) + 16);
+    g.restore();
+  }
+
   function drawWorld(pose) {
     const { g, w, h } = setupCanvas($("world"));
-    const v = view(w, h, minx, maxx, miny, maxy);
+    const v = camera(w, h, pose);
+    drawEarth(g, v, w, h);
     grid(g, v, w, h, 5, true);
 
     const f = F[pose.i];
@@ -478,7 +585,7 @@
     for (const r of M.route) g.lineTo(v.X(r.point_m[0]), v.Y(r.point_m[1]));
     g.lineTo(v.X(M.staging_point_m[0]), v.Y(M.staging_point_m[1])); g.stroke();
     g.setLineDash([]);
-    marker(g, v, M.staging_point_m, "Staging", "diamond");
+    marker(g, v, M.staging_point_m, stationPixels(v) >= 160 ? "Staging" : "", "diamond");
     STOPS.forEach((st, k) => {
       const status = stopStatus(st, pose.i);
       const col = status === "done" ? C("ok") : status === "current" ? "#ffffff" : "#8b949e";
@@ -490,7 +597,7 @@
       g.font = "bold 10px system-ui, sans-serif"; g.textAlign = "center"; g.fillText(String(k + 1), x, y + 3.5); g.textAlign = "left";
       g.font = "11px system-ui, sans-serif";
       const lx = x + (st.point_m[0] > -10 ? 13 : -13 - g.measureText(st.name).width);
-      g.fillText(st.name, lx, y - 10);
+      if (stationPixels(v) >= 160) g.fillText(st.name, lx, y - 10);
     });
 
     // Camera view while at the current inspection stop.
@@ -505,7 +612,7 @@
     g.font = "11px system-ui, sans-serif";
     g.strokeStyle = C("ok"); g.lineWidth = 2;
     g.beginPath(); g.arc(v.X(0), v.Y(0), Math.max(D.docking.max_distance_m * v.s, 4), 0, 2 * Math.PI); g.stroke();
-    g.fillStyle = C("ok"); g.fillText("Dock", v.X(0) + 8, v.Y(0) + 16);
+    g.fillStyle = C("ok"); if (stationPixels(v) >= 160) g.fillText("Dock", v.X(0) + 8, v.Y(0) + 16);
 
 
     // Full truth path faint, travelled part solid.
@@ -520,13 +627,19 @@
     g.fillStyle = "rgba(79,195,247,0.45)";
     for (let k = 0; k <= pose.i; k++) { const n = F[k].nav; if (n) g.fillRect(v.X(n[0]) - 1, v.Y(n[1]) - 1, 2, 2); }
 
+    // Rejected copilot proposals, faint red, while they are the latest word.
+    for (const e of EVENTS.filter(e => e.type === "copilot_verdict" && !e.accepted && e.k <= pose.i && pose.i - e.k < 150)) {
+      g.setLineDash([3, 4]); g.strokeStyle = "rgba(248,81,73,0.55)"; g.lineWidth = 1.5;
+      g.beginPath(); e.path_m.forEach((p, j) => j ? g.lineTo(v.X(p[0]), v.Y(p[1])) : g.moveTo(v.X(p[0]), v.Y(p[1]))); g.stroke(); g.setLineDash([]);
+    }
     // Recovery path from the latest plan made so far.
     const plan = planEvs.filter(e => e.k <= pose.i).pop();
     if (plan) {
-      const pts = plan.decision === "RETURN" ? [...plan.return_points_m, M.staging_point_m, [0, 0]]
+      const pts = plan.source === "copilot" ? plan.return_points_m
+        : plan.decision === "RETURN" ? [...plan.return_points_m, M.staging_point_m, [0, 0]]
         : plan.hold_point_m ? [plan.hold_point_m] : [];
       const start = F[plan.k].truth;
-      g.setLineDash([6, 4]); g.strokeStyle = "#e3b341"; g.lineWidth = 1.5;
+      g.setLineDash([6, 4]); g.strokeStyle = plan.source === "copilot" ? C("obs") : "#e3b341"; g.lineWidth = plan.source === "copilot" ? 2 : 1.5;
       g.beginPath(); g.moveTo(v.X(start[0]), v.Y(start[1]));
       for (const p of pts) g.lineTo(v.X(p[0]), v.Y(p[1]));
       g.stroke(); g.setLineDash([]);
@@ -657,6 +770,14 @@
           + `. ${esc(e.proposal.rationale)}`;
       case "reentry": return `Reentry: descended through ${e.altitude_km.toFixed(1)} km`;
       case "abort": return `ABORT: ${e.reason}`;
+      case "advisory_received": return `Station message ${e.id}: ${e.text}`;
+      case "baseline_assessment": return `Baseline would choose ${e.decision} (not shown to the copilot)`;
+      case "copilot_proposal": return `Copilot proposal ${e.attempt}: <b>${e.plan.decision}</b>: ${e.plan.steps.map(st => stepText(st)).join(" \u2192 ")}`;
+      case "copilot_verdict": return e.accepted ? `Validator ACCEPTED proposal ${e.attempt}` : `Validator REJECTED proposal ${e.attempt}: ${e.problems.join("; ")}`;
+      case "copilot_error": return `Copilot error: ${e.error}`;
+      case "authority": return `Authority \u2192 <b>${e.owner.toUpperCase()}</b>: ${e.reason}`;
+      case "coast_in_set": return `Coast-in: drifting toward the dock at ${(100 * e.speed_m_s).toFixed(1)} cm/s, thrusters off`;
+      case "diagnostic_turn": return `Turning before test-firing ${e.thruster}: it would push toward structure ${e.distance_to_structure_m} m away`;
       default: return e.type;
     }
   }
@@ -721,6 +842,43 @@
     html += `<div>Station clearance</div><div class="v t">${f.clear.toFixed(2)}<span class="u">m</span></div><div class="v note">not sensed</div>`;
     html += `<div>Nav fix age</div><div class="v"></div><div class="v o">${n ? n[4].toFixed(1) : "&ndash;"}<span class="u">s</span></div>`;
     $("relnav").innerHTML = html;
+  }
+
+  const COPILOT_EVS = EVENTS.filter(e => ["advisory_received", "copilot_proposal", "copilot_verdict", "copilot_error", "authority"].includes(e.type));
+  const HAS_COPILOT = S.mode === "copilot" || COPILOT_EVS.some(e => e.type === "advisory_received");
+  const stepText = st => st.action + (st.speed_m_s != null ? ` ${(100 * st.speed_m_s).toFixed(1)} cm/s`
+    : st.x_m != null ? ` (${st.x_m.toFixed(0)}, ${st.y_m.toFixed(0)})` : "");
+  const esc = x => String(x).replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+  function drawCopilot(pose) {
+    if (!HAS_COPILOT) return;
+    $("copilot-sec").hidden = false;
+    const seen = COPILOT_EVS.filter(e => e.k <= pose.i);
+    const auth = seen.filter(e => e.type === "authority").pop();
+    const owner = auth ? auth.owner : "baseline";
+    $("cp-auth").innerHTML = chip(owner === "copilot" ? "COPILOT" : "BASELINE", owner === "copilot" ? "info" : "idle")
+      + (auth ? `<span class="d" style="text-align:right">${esc(auth.reason)}</span>` : "");
+    $("cp-msgs").innerHTML = seen.filter(e => e.type === "advisory_received").map(e =>
+      `<div class="cp-msg"><b>STATION MESSAGE [${esc(e.id)}] t=${e.t.toFixed(0)} s</b><br>${esc(e.text)}</div>`).join("");
+    const props = seen.filter(e => e.type === "copilot_proposal");
+    const errs = seen.filter(e => e.type === "copilot_error");
+    let html = "";
+    if (S.mode !== "copilot") html += `<div class="note">Baseline run: no copilot attached (run with --copilot).</div>`;
+    else if (!props.length && !errs.length) html += `<div class="note">Standing by: the copilot is consulted when the recovery plan is made.</div>`;
+    for (const p of props) {
+      const v = seen.find(e => e.type === "copilot_verdict" && e.attempt === p.attempt);
+      const ok = v && v.accepted;
+      html += `<div class="cp-att ${v ? (ok ? "ok" : "bad") : ""}">`
+        + `<div style="display:flex;justify-content:space-between"><span><b>Proposal ${p.attempt}</b> \u00b7 ${chip(p.plan.decision, p.plan.decision === "DOCK" ? "info" : p.plan.decision === "HOLD" ? "warn" : "bad")}</span>`
+        + `<span>${v ? chip(ok ? "ACCEPTED" : "REJECTED", ok ? "ok" : "bad") : chip("CHECKING", "idle")}</span></div>`
+        + `<div class="steps">${p.plan.steps.map(st => chip(stepText(st), "idle")).join("<i>\u2192</i>")}</div>`
+        + `<div class="why">${esc(p.plan.assessment)}</div>`
+        + `<div class="why">${esc(p.plan.rationale)}${p.plan.advisories_considered.length ? ` \u00b7 follows ${p.plan.advisories_considered.map(esc).join(", ")}` : ""}`
+        + ` \u00b7 ${p.agent}, ${p.latency_s.toFixed(1)} s</div>`
+        + (v && !ok ? `<ul>${v.problems.map(x => `<li>${esc(x)}</li>`).join("")}</ul>` : "")
+        + `</div>`;
+    }
+    for (const e of errs) html += `<div class="cp-att bad">Copilot error: ${esc(e.error)}</div>`;
+    $("cp-body").innerHTML = html;
   }
 
   function drawHealth(pose) {
@@ -851,6 +1009,7 @@
       ["station clearance (m)", f.clear, null, 2],
     ];
     drawRelNav(f, T, n, a);
+    drawCopilot(pose);
     drawHealth(pose);
     drawSchematic(pose);
 
@@ -895,6 +1054,8 @@
   const qt = parseFloat(new URLSearchParams(location.search).get("t"));
   if (Number.isFinite(qt)) t = qt;
   render();
+  // ?autoplay=1 (used by the launcher's Run & play) starts playback on load.
+  if (new URLSearchParams(location.search).get("autoplay") === "1") togglePlay();
 })();
 </script>
 </body>

@@ -1,0 +1,12 @@
+[{"schema_version": 1,
+  "assessment": "Left thruster failed; forward/backward pair intact. Advisory STA-07 limits approach speed to 0.02 m/s within 3 m.",
+  "decision": "DOCK",
+  "steps": [{"action": "RETURN_TO_STAGING"}, {"action": "PREDOCK_STOP"}, {"action": "FINAL_APPROACH", "speed_m_s": 0.02}],
+  "advisories_considered": ["STA-07"],
+  "rationale": "Powered approach at the advisory limit."},
+ {"schema_version": 1,
+  "assessment": "Left thruster failed; forward/backward pair intact. Advisory STA-07 limits approach speed to 0.02 m/s within 3 m, including the pre-dock stop.",
+  "decision": "DOCK",
+  "steps": [{"action": "RETURN_TO_STAGING"}, {"action": "PREDOCK_STOP", "speed_m_s": 0.02}, {"action": "FINAL_APPROACH", "speed_m_s": 0.02}],
+  "advisories_considered": ["STA-07"],
+  "rationale": "Slow pre-dock stop and approach at the advisory limit."}]

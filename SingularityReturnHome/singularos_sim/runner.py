@@ -63,7 +63,7 @@ def truth_docking_check(state, config):
     }
 
 
-def run_scenario(config, out_dir=None, advisor=None):
+def run_scenario(config, out_dir=None, advisor=None, copilot=None):
     """Run one scenario. advisor: optional callable passed to the controller
     for LLM advice at decision points (logged only; see controller)."""
     scenario = config["scenario"]
@@ -81,8 +81,16 @@ def run_scenario(config, out_dir=None, advisor=None):
     sensors = build_sensors(config)
     controller = Controller(
         controller_spec(config), config["mission"], config["controller"], config["docking"], config["recovery"],
-        config["orbital"], advisor,
+        config["orbital"], advisor, copilot, config["station"]["components"],
     )
+    advisories = sorted(config.get("advisories", []), key=lambda a: a["t_s"])
+    delivered = 0
+    # Truth-side advisory compliance (evaluation only).
+    # Constraints apply from the time their advisory is sent.
+    speed_limits = [(a["t_s"], c) for a in advisories for c in a.get("constraints", []) if c["type"] == "max_approach_speed"]
+    keep_outs = [(a["t_s"], a["id"], c) for a in advisories for c in a.get("constraints", []) if c["type"] == "keep_out"]
+    dock_closed = [a["id"] for a in advisories if any(c["type"] == "dock_closed" for c in a.get("constraints", []))]
+    violations = []
     n = mean_motion(config["orbit"]["period_s"])
     min_altitude = (float("inf"), None)
     reentry = None
@@ -135,6 +143,20 @@ def run_scenario(config, out_dir=None, advisor=None):
             if events:
                 record["truth"]["events"] = events
                 truth_events.extend(events)
+            while delivered < len(advisories) and advisories[delivered]["t_s"] <= t + 1e-9:
+                controller.receive_advisory(t, advisories[delivered])
+                delivered += 1
+            # Advisory compliance on truth (evaluation only).
+            s = vehicle.state
+            rng = math.hypot(s.x_m, s.y_m)
+            spd = math.hypot(s.vx_m_s, s.vy_m_s)
+            for t0, c in speed_limits:
+                if t >= t0 and rng <= c["within_m"] and spd > c["value_m_s"] + 1e-3 and controller.phase != "DOCKED":
+                    violations.append({"t": t, "type": "max_approach_speed", "speed_m_s": spd, "range_m": rng,
+                                       "limit_m_s": c["value_m_s"]})
+            for t0, aid, c in keep_outs:
+                if t >= t0 and c["min_m"][0] <= s.x_m <= c["max_m"][0] and c["min_m"][1] <= s.y_m <= c["max_m"][1]:
+                    violations.append({"t": t, "type": "keep_out", "advisory": aid, "label": c.get("label", aid)})
             if step % ctrl_steps == 0:
                 command = controller.update(t, pending)
                 pending = []
@@ -169,6 +191,12 @@ def run_scenario(config, out_dir=None, advisor=None):
             vehicle.step(command)
             step += 1
 
+    if dock_closed and controller.final == "DOCKED":
+        violations.append({"t": step * dt, "type": "docked_while_closed", "advisories": dock_closed})
+    # Collapse per-step violations into the first occurrence of each kind.
+    first_violations = {}
+    for v in violations:
+        first_violations.setdefault(v["type"], {**v, "steps": 0})["steps"] += 1
     final = vehicle.state
     outcome = controller.final or "NOT_DOCKED"
     reasons = {
@@ -184,7 +212,8 @@ def run_scenario(config, out_dir=None, advisor=None):
         "scenario": scenario["name"],
         "seed": scenario["seed"],
         "outcome": outcome,
-        "expected_outcome": scenario["expected_outcome"],
+        "mode": "copilot" if copilot is not None else "baseline",
+        "expected_outcome": scenario["expected_outcome_copilot" if copilot is not None else "expected_outcome"],
         "reason": reasons[outcome],
         "final_phase": controller.phase,
         "sim_time_s": step * dt,
@@ -210,6 +239,9 @@ def run_scenario(config, out_dir=None, advisor=None):
         "min_altitude_km": {"altitude_km": min_altitude[0], "t": min_altitude[1]},
         "reentry": reentry,
         "orbital_triage": next((e for e in controller_events if e["type"] == "orbital_triage"), None),
+        "advisory_violations": list(first_violations.values()),
+        "authority": controller.authority,
+        "copilot": [e for e in controller_events if e["type"].startswith("copilot_")],
         "llm_advice": [e for e in controller_events if e["type"] == "llm_advice"],
         "final_position_m": [final.x_m, final.y_m],
         "plan": next((e for e in reversed(controller_events) if e["type"] == "plan"), None),

@@ -218,6 +218,9 @@ brake_speed_m_s = 0.03
 brake_timeout_s = 20.0
 diag_settle_s = 1.5
 diag_pulse_s = 3.0
+brake_hard_limit_factor = 3.0    # braking may run this x brake_timeout while closing on structure
+diag_safe_distance_m = 8.0       # test firings near structure must push away from it
+diag_turn_tolerance_rad = 0.03
 diag_average_s = 1.0             # velocity averaged over this window before/after
 diag_min_expected_dv_m_s = 0.2   # braking evidence needed before judging a thruster
 passive_failed_ratio = 0.1       # braking evidence below this marks a thruster failed
@@ -240,6 +243,16 @@ nav_average_samples = 15         # averaging window for pre-dock and drift check
 approach_lateral_limit_m = 0.2   # degraded final approach: back out beyond this
 max_dock_retries = 3             # then fall back to HOLD
 abort_brake_timeout_s = 60.0     # ABORT: brake this long at most, then thrusters off
+# AI copilot (only used when a copilot is attached, e.g. --copilot).
+copilot_max_attempts = 3         # proposals per decision point before the baseline takes over
+copilot_min_clearance_m = 2.0    # straight copilot paths keep this far from the station
+coast_predock_distance_m = 1.5   # coast-in starts from this far out (room to turn while coasting)
+coast_min_speed_m_s = 0.01
+coast_margin = 0.6               # coast speed at most this fraction of the docking speed limit (noise margin)
+coast_speed_tolerance_m_s = 0.004
+coast_align_tolerance_rad = 0.03 # thruster pair aligned with the dock axis before the burn
+coast_settle_s = 1.0
+advisory_speed_margin = 0.6      # fly at this fraction of an advisory speed limit
 hold_tolerance_m = 1.0
 hold_confirm_s = 20.0
 # Planner fuel check.

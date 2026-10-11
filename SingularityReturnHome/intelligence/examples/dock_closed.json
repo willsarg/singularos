@@ -1,0 +1,6 @@
+[{"schema_version": 1,
+  "assessment": "Left thruster failed; docking would be possible, but advisory STA-11 closes the dock.",
+  "decision": "HOLD",
+  "steps": [{"action": "RETURN_TO_STAGING"}, {"action": "HOLD_AT", "x_m": 8.0, "y_m": 0.0}],
+  "advisories_considered": ["STA-11"],
+  "rationale": "Dock closed by the station: hold at the staging point and await clearance."}]

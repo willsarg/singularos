@@ -155,6 +155,58 @@ incident summaries. Tests run against an in-process fake server (Workers AI,
 Ollama and OpenAI-compatible endpoints); set `SINGULAROS_LLM_INTEGRATION=1`
 to also test the configured live server.
 
+## AI copilot
+
+With `--copilot`, the LLM does more than advise: at the recovery decision it
+proposes a multi-step plan, and if a deterministic validator accepts it, the
+controller flies it. The copilot proposes; it never drives actuators and never
+asserts feasibility (MISSION.md section 7).
+
+1. After the fault is detected and diagnosed, the controller sends the copilot
+   its evidence: diagnosed thruster health, observed position, velocity and
+   fuel, and the text of any station advisories, together with the vehicle
+   manual (`intelligence/manual/vehicle-manual.md`). It does not send the
+   baseline's own decision, and never truth.
+2. The copilot replies with a plan matching
+   `intelligence/schemas/copilot-plan.json`: an assessment, a decision (DOCK,
+   HOLD, ABORT), steps from a fixed library (RETURN_TO_STAGING, GOTO,
+   PREDOCK_STOP, COAST_IN, FINAL_APPROACH, HOLD_AT, SAFE_STOP), the advisories
+   it followed, and a rationale.
+3. `singularos_sim/plan_validator.py` checks structure, prerequisites,
+   thruster capability, speed limits, advisories, station clearance and fuel.
+   A rejected plan's problems go back to the copilot, up to
+   `recovery.copilot_max_attempts`.
+4. An accepted plan is flown and the copilot holds actuator authority. With no
+   accepted plan, an error, or no reachable model, the baseline plan is used.
+   If the copilot's plan exhausts its docking retries, authority returns to
+   the baseline (HOLD).
+
+Station advisories (`[[advisories]]` in a scenario) carry text for the
+copilot and structured constraints for the validator (`max_approach_speed`,
+`dock_closed`, `keep_out`). The baseline does not act on them. Advisory
+compliance is scored on truth and fails a run.
+
+```sh
+ollama serve                                             # model as in "LLM advisor"
+.venv/bin/python -m singularos_sim scenarios/copilot_coast_in.toml --copilot
+.venv/bin/python -m singularos_sim scenarios/copilot_coast_in.toml --copilot \
+    --copilot-plan intelligence/examples/coast_in.json   # scripted plan, no model
+```
+
+| Scenario | Fault and advisory | Baseline | Copilot (correct plan) |
+|---|---|---|---|
+| `copilot_coast_in` | backward thruster lost | HOLD (cannot dock without both axial thrusters) | DOCKED by coast-in |
+| `copilot_advisory_speed` | left thruster lost; approach at most 2 cm/s within 3 m | DOCKED but breaks the speed limit | DOCKED within the limit |
+| `copilot_trap_dock_closed` | left thruster lost; dock closed | DOCKED although the dock is closed | HOLD at a safe point |
+
+The replay's AI copilot panel shows actuator authority, station messages, each
+proposal with its steps and reasoning, and the validator's verdict with the
+reasons for any rejection; the accepted plan is drawn on the map.
+
+Limits: sim time pauses while the model answers (latency is logged, not
+simulated); the step library is fixed; with scripted plans the copilot shows
+the mechanism, not the model's reasoning.
+
 ## Physics
 
 2D, in-plane, in a frame centred on the station's dock: +x radial (away from

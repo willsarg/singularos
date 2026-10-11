@@ -1,0 +1,18 @@
+# AI copilot demo: left thruster lost (recoverable), and the station sends a
+# new operating restriction as text. The baseline does not read advisories:
+# it docks but breaks the speed limit. The copilot must fold the limit into
+# its plan; the validator enforces it.
+extends = "thruster_fault.toml"
+
+[scenario]
+name = "copilot_advisory_speed"
+expected_outcome = "DOCKED"
+# The baseline does not read advisories, so it is expected to fail here.
+baseline_expected_to_fail = true
+expected_outcome_copilot = "DOCKED"
+
+[[advisories]]
+id = "STA-07"
+t_s = 170.0
+text = "Station to inspection craft: EVA crew working near docking port A. Until further notice, approach speed must not exceed 2 cm/s within 3 m of the port."
+constraints = [{ type = "max_approach_speed", value_m_s = 0.02, within_m = 3.0 }]
