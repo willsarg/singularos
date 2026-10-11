@@ -19,7 +19,7 @@ function pageLoader() {
   const pending = new Map();
   let url = 'http://localhost/';
   const context = vm.createContext({
-    ...mission, $, runsUrl: 'runs/', available: false, run: null, playback: null,
+    ...mission, $, live: false, runsUrl: 'runs/', available: false, run: null, playback: null,
     lastLog: '', phaseButtons: [], scenarioRequest: 0, reduceMotion: { matches: true },
     URL, Option: function () {}, location: { get href() { return url; } },
     history: { replaceState(_state, _title, value) { url = String(value); } },
@@ -28,7 +28,7 @@ function pageLoader() {
     fetch: (uri) => new Promise((resolve, reject) => pending.set(uri, { resolve, reject })),
   });
   const source = readFileSync(new URL('../src/main.js', import.meta.url), 'utf8');
-  vm.runInContext(source.slice(source.indexOf('async function loadScenario'), source.indexOf("$('play').addEventListener")), context);
+  vm.runInContext(source.slice(source.indexOf('async function responseError'), source.indexOf("$('play').addEventListener")), context);
   return {
     load: (name) => context.loadScenario(name),
     complete(name) {

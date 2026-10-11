@@ -7,7 +7,12 @@ import {
 const $ = (id) => document.getElementById(id);
 const params = new URLSearchParams(location.search);
 const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
+// Live: the site's Worker runs the simulator per request (/api/run) and asks
+// Workers AI for advice (/api/advice). The demo and static modes play
+// exported files instead.
+const live = !['demo', 'static'].includes(import.meta.env.MODE);
 const runsUrl = `${import.meta.env.BASE_URL}${import.meta.env.MODE === 'demo' ? 'runs-llm/' : 'runs/'}`;
+const apiUrl = `${import.meta.env.BASE_URL}api/`;
 let scene;
 let run = null;
 let playback = null;
@@ -30,14 +35,16 @@ function updateAdvice(time) {
   adviceRun = run;
   lastAdvice = advice;
   $('advice-backend').textContent = { 'workers-ai': 'WORKERS AI', ollama: 'OLLAMA' }[metadata.backend] ?? 'MODEL';
+  $('advice-kind').textContent = metadata.live ? 'LIVE ADVICE' : 'RECORDED ADVICE';
   $('advice-model').textContent = metadata.model?.split('/').at(-1) || 'Configured model';
   $('advice-model').title = metadata.model || '';
   $('advice-details').hidden = !advice || !!advice.error;
   $('advice-checks').replaceChildren();
   $('advice-time').textContent = advice ? `${formatMET(advice.t)} · ${advice.point.replaceAll('_', ' ')}` : 'ADVISORY ONLY';
   if (!advice) {
-    $('advice-proposal').textContent = run.events.some((e) => e.type === 'llm_advice')
-      ? 'Awaiting recovery decision' : 'No advice requested for this run';
+    $('advice-proposal').textContent = run.adviceStatus === 'pending' ? 'Asking Workers AI for advice'
+      : run.adviceStatus ? run.adviceStatus
+      : run.events.some((e) => e.type === 'llm_advice') ? 'Awaiting recovery decision' : 'No advice requested for this run';
     $('advice-comparison').textContent = 'The flight controller executes the mission.';
     return;
   }
@@ -183,19 +190,51 @@ function setPlaying(playing) {
   schedule();
 }
 
-async function loadScenario(name, frozen = null) {
+async function responseError(response, label) {
+  const body = await response.json().catch(() => ({}));
+  return new Error(`${label}: ${body.error ?? `HTTP ${response.status}`}`);
+}
+
+// Live advice for the run just loaded; the run plays while the model answers.
+async function loadAdvice(target) {
+  target.adviceStatus = 'pending';
+  try {
+    const response = await fetch(`${apiUrl}advice?scenario=${target.data.scenario}&seed=${target.data.seed}`);
+    if (!response.ok) throw await responseError(response, 'Advice');
+    const { events } = await response.json();
+    target.addEvents(events);
+    target.adviceStatus = events.length ? null : 'No decision point needed advice in this run';
+  } catch (error) {
+    target.adviceStatus = `Advice unavailable (${error.message})`;
+  }
+  if (target === run) {
+    lastLog = '';
+    adviceRun = null;
+    if (playback) updateUI(playback.time);
+  }
+}
+
+async function loadScenario(name, frozen = null, seed = null) {
   const requestId = ++scenarioRequest;
   let data;
+  $('new-run').disabled = true;
   try {
-    const response = await fetch(`${runsUrl}${name}.json`);
-    if (!response.ok) throw new Error(`Run ${name}: HTTP ${response.status}`);
+    const response = await fetch(live
+      ? `${apiUrl}run?scenario=${name}${seed ? `&seed=${seed}` : ''}`
+      : `${runsUrl}${name}.json`);
+    if (!response.ok) throw await responseError(response, `Run ${name}`);
     data = await response.json();
   } catch (error) {
     if (requestId !== scenarioRequest) return;
     throw error;
+  } finally {
+    $('new-run').disabled = false;
   }
   if (requestId !== scenarioRequest) return;
   run = createRun(data);
+  if (live) loadAdvice(run);
+  $('seed').hidden = $('new-run').hidden = !live;
+  $('seed').textContent = live ? `SEED ${data.seed}` : '';
   const speed = autoSpeed(run.duration);
   const time = frozen === null ? 0 : parseFrozenTime(frozen, run.duration) ?? 0;
   const wasPlaying = playback ? playback.playing : frozen === null && !reduceMotion.matches;
@@ -249,12 +288,16 @@ async function loadScenario(name, frozen = null) {
   $('key-moments').hidden = moments.length === 0;
   const url = new URL(location.href);
   url.searchParams.set('scenario', name);
+  if (live) url.searchParams.set('seed', data.seed);
   history.replaceState(null, '', url);
   render();
   schedule();
 }
 
 $('play').addEventListener('click', () => setPlaying(!playback.playing));
+$('new-run').addEventListener('click', () => {
+  loadScenario($('scenario').value).catch(showLoadError);
+});
 $('replay').addEventListener('click', () => {
   playback.seek(0);
   setPlaying(true);
@@ -345,8 +388,8 @@ try {
 setViewMode(viewMode);
 
 (async () => {
-  const response = await fetch(`${runsUrl}index.json`);
-  if (!response.ok) throw new Error(`Run index: HTTP ${response.status}`);
+  const response = await fetch(live ? `${apiUrl}scenarios` : `${runsUrl}index.json`);
+  if (!response.ok) throw await responseError(response, 'Scenario list');
   const index = await response.json();
   const requested = params.get('scenario');
   const name = index.some((entry) => entry.name === requested) ? requested : DEFAULT_SCENARIO;
@@ -355,5 +398,5 @@ setViewMode(viewMode);
     option.selected = entry.name === name;
     return option;
   }));
-  await loadScenario(name, params.get('t'));
+  await loadScenario(name, params.get('t'), name === requested ? params.get('seed') : null);
 })().catch(showLoadError);

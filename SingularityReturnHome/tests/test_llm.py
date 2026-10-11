@@ -393,3 +393,49 @@ def test_live_server_returns_valid_proposal():
     assert client.health()["ok"], client.health()["detail"]
     advice = RecoveryAdvisor(RecoveryHarness(client))(triage_context())
     assert "proposal" in advice, advice.get("error")
+
+
+# ------------------------------------------------ async path (Python Worker)
+
+
+def test_async_harness_retries_like_the_sync_one():
+    import asyncio
+    replies = ["not json", json.dumps(proposal(rationale="short")), json.dumps(proposal())]
+    seen = []
+
+    async def chat(messages, schema):
+        seen.append(messages)
+        return replies[len(seen) - 1]
+
+    p = asyncio.run(RecoveryHarness(client=object()).propose_async("context", chat))
+    assert p.mode == "INVESTIGATE" and len(seen) == 3
+    assert "not valid JSON" in seen[1][-1]["content"]
+
+
+def test_recorded_contexts_match_a_live_advisor(ollama_factory, tmp_path):
+    import asyncio
+    from intelligence.advisor import ContextRecorder, advise_async
+    reply = proposal(mode="HOLD", requested_checks=["FUEL_BUDGET", "ORBIT_SAFETY", "TRAJECTORY_FEASIBILITY"],
+                     rationale="Perigee is below the surface; a 92 m/s prograde burn fits the budget.",
+                     plan={"action": "RAISE_PERIGEE", "parameters": {"max_delta_v_mps": 95}})
+    server = ollama_factory([json.dumps(reply)])
+    config = load_config(SCENARIOS / "orbital_strike_safe_orbit.toml")
+    live = run_scenario(config, tmp_path / "live", RecoveryAdvisor(RecoveryHarness(client_for(server))))
+    recorder = ContextRecorder()
+    deferred = run_scenario(config, tmp_path / "deferred", recorder)
+    assert deferred["final_position_m"] == live["final_position_m"]
+    [ctx] = recorder.contexts
+
+    async def chat(messages, schema):
+        return json.dumps(reply)
+
+    event = asyncio.run(advise_async(RecoveryHarness(client=object()), ctx, chat))
+    [logged] = live["llm_advice"]
+    for key in ("t", "type", "point", "decision", "proposal", "review"):
+        assert event[key] == logged[key], key
+
+
+def test_worker_model_matches_the_client_default():
+    entry = (Path(__file__).resolve().parent.parent / "worker" / "entry.py").read_text()
+    from intelligence.llm import DEFAULT_MODELS
+    assert f'MODEL = "{DEFAULT_MODELS["workers-ai"]}"' in entry

@@ -147,32 +147,53 @@ class RecoveryHarness:
         self.schema = schema or load_schema()
         self.max_retries = max_retries
 
+    def _prompt(self, context, last_problems):
+        prompt = [{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": context}]
+        if last_problems:
+            prompt.append({"role": "user", "content": "Your previous proposal failed validation: "
+                           + "; ".join(last_problems) + ". Propose again, fixing these."})
+        return prompt
+
+    def _check(self, content):
+        """(Proposal, []) if the reply is valid, else (None, problems)."""
+        try:
+            candidate = json.loads(content)
+        except json.JSONDecodeError:
+            return None, ["reply was not valid JSON"]
+        problems = schema_problems(candidate, self.schema) or semantic_problems(candidate)
+        return (None, problems) if problems else (Proposal(raw=candidate), [])
+
+    def _give_up(self, problems):
+        return ProposalValidationError(
+            f"proposal failed validation after {self.max_retries + 1} attempts: {'; '.join(problems)}"
+        )
+
     def propose(self, context: str) -> Proposal:
         """Ask for a recovery proposal given a mission context summary."""
-        messages = [{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": context}]
-        last_problems = []
+        problems = []
         for _ in range(self.max_retries + 1):
-            prompt = list(messages)
-            if last_problems:
-                prompt.append({"role": "user", "content": "Your previous proposal failed validation: "
-                               + "; ".join(last_problems) + ". Propose again, fixing these."})
             try:
-                content = self.client.chat(prompt, self.schema)
+                content = self.client.chat(self._prompt(context, problems), self.schema)
             except LLMError as e:
                 raise HarnessError(str(e)) from e
+            proposal, problems = self._check(content)
+            if proposal:
+                return proposal
+        raise self._give_up(problems)
+
+    async def propose_async(self, context: str, chat) -> Proposal:
+        """As propose, with chat an async callable (messages, schema) -> reply
+        text, e.g. the AI binding of a Worker."""
+        problems = []
+        for _ in range(self.max_retries + 1):
             try:
-                candidate = json.loads(content)
-            except json.JSONDecodeError:
-                last_problems = ["reply was not valid JSON"]
-                continue
-            last_problems = schema_problems(candidate, self.schema)
-            if not last_problems:
-                last_problems = semantic_problems(candidate)
-            if not last_problems:
-                return Proposal(raw=candidate)
-        raise ProposalValidationError(
-            f"proposal failed validation after {self.max_retries + 1} attempts: {'; '.join(last_problems)}"
-        )
+                content = await chat(self._prompt(context, problems), self.schema)
+            except LLMError as e:
+                raise HarnessError(str(e)) from e
+            proposal, problems = self._check(content)
+            if proposal:
+                return proposal
+        raise self._give_up(problems)
 
     def health(self):
         return self.client.health()

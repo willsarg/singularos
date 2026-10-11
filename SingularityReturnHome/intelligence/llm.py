@@ -77,6 +77,32 @@ class LLMError(Exception):
     """The model server could not be reached or returned an unusable reply."""
 
 
+def workers_ai_payload(config, messages, schema=None):
+    """Workers AI input for a chat; the same for the REST API and the AI
+    binding of a Worker (env.AI.run(model, payload))."""
+    payload = {"messages": messages, "temperature": config.temperature,
+               # Reasoning tokens count against max_tokens.
+               "max_tokens": 1024 if config.think is False else 8192}
+    if schema is not None:
+        payload["response_format"] = {"type": "json_schema",
+                                      "json_schema": strip_keywords(schema, WORKERS_AI_UNSUPPORTED)}
+    if config.think is not None:
+        payload["chat_template_kwargs"] = {"enable_thinking": config.think}
+    return payload
+
+
+def workers_ai_content(result):
+    """Reply text from a Workers AI chat result."""
+    try:
+        choice = result["choices"][0]
+        content = choice["message"]["content"]
+    except (KeyError, IndexError, TypeError) as e:
+        raise LLMError(f"malformed workers-ai reply: missing {e}") from e
+    if not content:
+        raise LLMError(f"workers-ai: empty reply (finish_reason {choice.get('finish_reason')})")
+    return content
+
+
 @dataclass
 class LLMConfig:
     base_url: str = DEFAULT_URLS["workers-ai"]
@@ -180,25 +206,10 @@ class LLMClient:
         missing = self._workers_ai_missing()
         if missing:
             raise LLMError(f"workers-ai: {missing}")
-        payload = {"messages": messages, "temperature": c.temperature,
-                   # Reasoning tokens count against max_tokens.
-                   "max_tokens": 1024 if c.think is False else 8192}
-        if schema is not None:
-            payload["response_format"] = {"type": "json_schema",
-                                          "json_schema": strip_keywords(schema, WORKERS_AI_UNSUPPORTED)}
-        if c.think is not None:
-            payload["chat_template_kwargs"] = {"enable_thinking": c.think}
-        reply = self._request(f"/accounts/{c.account_id}/ai/run/{c.model}", payload)
+        reply = self._request(f"/accounts/{c.account_id}/ai/run/{c.model}", workers_ai_payload(c, messages, schema))
         if not reply.get("success", True):
             raise LLMError(f"workers-ai: {reply.get('errors')}")
-        try:
-            choice = reply["result"]["choices"][0]
-            content = choice["message"]["content"]
-        except (KeyError, IndexError, TypeError) as e:
-            raise LLMError(f"malformed workers-ai reply: missing {e}") from e
-        if not content:
-            raise LLMError(f"workers-ai: empty reply (finish_reason {choice.get('finish_reason')})")
-        return content
+        return workers_ai_content(reply.get("result"))
 
     def health(self):
         """Server status: {"ok", "detail", "model_available"}. Never raises."""

@@ -47,7 +47,7 @@
         <div><span class="metric-label">PERIGEE</span><strong id="perigee">0 km</strong></div>
       </div>
       <section class="advice-card" id="advice-card" aria-label="Recorded model advice" hidden>
-        <div class="advice-heading"><span id="advice-backend">MODEL</span><span>RECORDED ADVICE</span></div>
+        <div class="advice-heading"><span id="advice-backend">MODEL</span><span id="advice-kind">RECORDED ADVICE</span></div>
         <p class="advice-model" id="advice-model"></p>
         <p class="advice-time" id="advice-time"></p>
         <p class="advice-proposal" id="advice-proposal"></p>
@@ -81,6 +81,8 @@
       <span class="run-controls">
         <label for="scenario">SCENARIO</label> <select id="scenario"></select>
         <label for="speed">SPEED</label> <select id="speed"></select>
+        <span id="seed" class="seed" hidden></span>
+        <button type="button" id="new-run" class="new-run" hidden>New run</button>
       </span>
       <span id="playback-status">AUTOPLAY</span>
     </div>

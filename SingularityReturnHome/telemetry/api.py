@@ -13,7 +13,7 @@ from singularos_sim.config import load_config, with_seed
 from singularos_sim.replay import build_replay
 from singularos_sim.runner import DEFAULT_RUNS_DIR, run_scenario
 
-SCENARIOS_DIR = Path(__file__).resolve().parents[1] / "scenarios"
+from .scenarios import SCENARIOS_DIR, scenario_names
 TRACK_PERIOD_S = 1.0
 
 
@@ -36,10 +36,6 @@ def mission_snapshot(disturbance_m_s=150):
         "safety_verification": safety,
         "recovery_feasible": safety["authorized"],
     }
-
-
-def scenario_names():
-    return sorted(p.stem for p in SCENARIOS_DIR.glob("*.toml"))
 
 
 def list_scenarios():

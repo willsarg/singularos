@@ -36,6 +36,10 @@ def context_text(ctx):
     return "\n".join(lines)
 
 
+def _record(proposal, ctx, start):
+    return {"proposal": proposal.raw, "review": review(proposal, ctx), "latency_s": time.monotonic() - start}
+
+
 class RecoveryAdvisor:
     def __init__(self, harness: RecoveryHarness | None = None):
         self.harness = harness or RecoveryHarness()
@@ -46,8 +50,31 @@ class RecoveryAdvisor:
             proposal = self.harness.propose(context_text(ctx))
         except HarnessError as e:
             return {"error": str(e), "latency_s": time.monotonic() - start}
-        return {
-            "proposal": proposal.raw,
-            "review": review(proposal, ctx),
-            "latency_s": time.monotonic() - start,
-        }
+        return _record(proposal, ctx, start)
+
+
+class ContextRecorder:
+    """Advisor stand-in that records each decision context and returns no
+    advice, for callers that ask the model afterwards (advise_async). Advice
+    never changes the run, so the recorded contexts are the ones a live
+    advisor would have seen."""
+
+    def __init__(self):
+        self.contexts = []
+
+    def __call__(self, ctx):
+        self.contexts.append(ctx)
+        return {"deferred": True}
+
+
+async def advise_async(harness, ctx, chat):
+    """The record RecoveryAdvisor returns, with chat an async callable
+    (messages, schema) -> reply text; the controller's llm_advice event
+    fields (t, point, decision) are added."""
+    start = time.monotonic()
+    event = {"t": ctx["t"], "type": "llm_advice", "point": ctx["point"], "decision": ctx["decision"]}
+    try:
+        proposal = await harness.propose_async(context_text(ctx), chat)
+    except HarnessError as e:
+        return {**event, "error": str(e), "latency_s": time.monotonic() - start}
+    return {**event, **_record(proposal, ctx, start)}

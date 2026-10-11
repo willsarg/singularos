@@ -23,7 +23,7 @@ from singularos_sim.orbit import EARTH_RADIUS_M, mean_motion, orbit_status, stat
 from singularos_sim.replay import build_frames, describe_faults
 from singularos_sim.runner import DEFAULT_RUNS_DIR, run_scenario
 
-from .api import SCENARIOS_DIR, scenario_names
+from .scenarios import SCENARIOS_DIR, scenario_names
 
 SAMPLE_PERIOD_S = 0.4
 DEFAULT_OUT = Path(__file__).resolve().parents[2] / "web" / "public" / "runs"
@@ -45,10 +45,15 @@ def scenario_description(name):
     return " ".join(lines)
 
 
-def export_run(name, out_dir, seed=None, advisor=None, advisor_metadata=None):
+def run_data(name, seed=None, advisor=None, advisor_metadata=None, run=None):
+    """Run a scenario and return its playback data (a dict, as written by
+    export_run). run: directory for the simulator log (default
+    runs/web-<scenario>/ or runs/web-llm-<scenario>/)."""
     config = with_seed(load_config(SCENARIOS_DIR / f"{name}.toml"), seed)
-    prefix = "web-llm" if advisor is not None else "web"
-    run = DEFAULT_RUNS_DIR / f"{prefix}-{name}"
+    if run is None:
+        prefix = "web-llm" if advisor is not None else "web"
+        run = DEFAULT_RUNS_DIR / f"{prefix}-{name}"
+    run = Path(run)
     run_scenario(config, run, advisor=advisor)
     config = json.loads((run / "config.json").read_text())
     summary = json.loads((run / "summary.json").read_text())
@@ -137,10 +142,20 @@ def export_run(name, out_dir, seed=None, advisor=None, advisor_metadata=None):
         "events": events,
         "samples": samples,
     }
+    return data
+
+
+def index_entry(data):
+    summary = data["summary"]
+    return {"name": data["scenario"], "expected_outcome": summary["expected_outcome"], "outcome": summary["outcome"],
+            "faults": data["faults"], "sim_time_s": summary["sim_time_s"]}
+
+
+def export_run(name, out_dir, seed=None, advisor=None, advisor_metadata=None):
+    data = run_data(name, seed, advisor, advisor_metadata)
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / f"{name}.json").write_text(json.dumps(data, separators=(",", ":")))
-    return {"name": name, "expected_outcome": summary["expected_outcome"], "outcome": summary["outcome"],
-            "faults": data["faults"], "sim_time_s": summary["sim_time_s"]}
+    return index_entry(data)
 
 
 def main(argv=None):

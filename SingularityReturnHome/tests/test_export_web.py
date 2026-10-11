@@ -62,3 +62,12 @@ def test_requested_llm_export_reports_unavailable_server(tmp_path, monkeypatch, 
     assert error.value.code == 2
     assert "advisor unavailable" in capsys.readouterr().err.lower()
     assert not (tmp_path / "index.json").exists()
+
+
+def test_run_data_in_memory_matches_the_export(tmp_path):
+    from telemetry.export_web import run_data
+    main(["--out", str(tmp_path / "out"), "thruster_fault"])
+    exported = json.loads((tmp_path / "out/thruster_fault.json").read_text())
+    data = run_data("thruster_fault", run=tmp_path / "log")
+    assert data["samples"] == exported["samples"] and data["events"] == exported["events"]
+    assert run_data("thruster_fault", seed=7, run=tmp_path / "seed7")["summary"]["seed"] == 7

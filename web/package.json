@@ -3,14 +3,17 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "pnpm run export-runs && vite --host 127.0.0.1",
-    "build": "pnpm run export-runs && vite build",
+    "dev": "vite --host 127.0.0.1",
+    "dev:worker": "pnpm run bundle-worker && vite build && wrangler dev",
+    "dev:static": "pnpm run export-runs && vite --host 127.0.0.1 --mode static",
+    "build": "vite build",
+    "bundle-worker": "node scripts/bundle-worker.mjs",
     "build:demo": "pnpm run export-runs:llm && vite build --mode demo",
     "preview": "vite preview --host 127.0.0.1",
     "test": "pnpm run export-runs && node --test",
     "export-runs": "cd ../SingularityReturnHome && .venv/bin/python -m telemetry.export_web",
     "export-runs:llm": "cd ../SingularityReturnHome && .venv/bin/python -m telemetry.export_web --llm --out ../web/public/runs-llm",
-    "deploy": "pnpm build && wrangler deploy"
+    "deploy": "pnpm run bundle-worker && pnpm build && wrangler deploy"
   },
   "devDependencies": {
     "vite": "^8.3.4",

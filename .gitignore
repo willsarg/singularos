@@ -82,3 +82,6 @@ sim_1/runs/
 # Simulator runs exported for the 3D site (pnpm run export-runs)
 web/public/runs/
 web/public/runs-llm/
+
+# Python Worker bundle (pnpm run bundle-worker)
+web/.worker/

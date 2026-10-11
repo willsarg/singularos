@@ -5,7 +5,10 @@ craft working around an orbital station detects faults, diagnoses its thrusters,
 and returns to dock, holds, or aborts after an impact.
 
 Position, heading, delivered thrust, navigation observations, telemetry, and
-events come from exported Python simulator runs. The spacecraft's visual detail
+events come from the Python simulator. On singularos.willsarg.com it runs on
+Cloudflare: the site's Python Worker runs the selected scenario with a new
+random seed on each load and asks Workers AI (`@cf/qwen/qwen3.8-27b`) for
+advisory recovery proposals at the run's decision points. The spacecraft's visual detail
 and station depth are illustrative; the physics is planar. This is a simulation,
 not flight hardware or a Linux operating system.
 
@@ -19,13 +22,20 @@ python3 -m venv SingularityReturnHome/.venv
 SingularityReturnHome/.venv/bin/python -m pip install -r SingularityReturnHome/requirements.txt
 cd web
 pnpm install
-pnpm dev
+pnpm run dev:worker   # the Worker with the built site, http://127.0.0.1:8787
+pnpm dev              # in a second terminal: Vite with /api proxied to the Worker
 ```
+
+`pnpm run dev:worker` signs in to Cloudflare through Wrangler: the Workers AI
+binding always runs remotely, also in local development. `pnpm run dev:static`
+plays exported runs without a Worker or Cloudflare account.
 
 Open the local URL printed by Vite. Use Pause, Replay, the timeline, or the
 mission-phase buttons to inspect the animation. A URL query such as `?t=18.5`
 opens a paused view at that simulator second. Select a run with the scenario
-picker or a query such as `?scenario=thruster_degraded&t=533.8`. Reduced-motion
+picker or a query such as `?scenario=thruster_degraded&t=533.8`. The seed of
+each live run is shown next to the pickers and added to the URL (`&seed=N`),
+so a link reproduces the run; New run starts the scenario with a new seed. Reduced-motion
 preferences start playback paused; playback can be started explicitly.
 
 Cinematic is the default camera: it opens on the station, tracks the spacecraft,

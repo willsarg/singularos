@@ -86,9 +86,8 @@ export function createRun(data) {
 
   // Phase spans: start time of each phase in order of first appearance.
   const phaseStarts = data.phases.map((phase, p) => ({ phase, t: s.t[s.phase.indexOf(p)] }));
-  const events = data.events
-    .map((e) => ({ ...e, text: eventText(e) }))
-    .filter((e) => e.text);
+  const withText = (list) => list.map((e) => ({ ...e, text: eventText(e) })).filter((e) => e.text);
+  const events = withText(data.events);
   const impactWindows = [];
   for (const hit of events.filter((e) => e.type === 'impact' && e.source === 'truth').sort((a, b) => a.t - b.t)) {
     const window = { start: Math.max(0, hit.t - 3), end: Math.min(duration, hit.t + 5) };
@@ -147,6 +146,11 @@ export function createRun(data) {
     sampleIndex: index,
     eventsUntil: (time) => events.filter((e) => e.t <= time),
     adviceAt: (time) => events.findLast((e) => e.type === 'llm_advice' && e.t <= time) ?? null,
+    // Adds events that arrive after the run, e.g. live model advice.
+    addEvents(list) {
+      events.push(...withText(list));
+      events.sort((a, b) => a.t - b.t);
+    },
     phaseIndex(time) {
       return phaseStarts.findLastIndex((p) => time >= p.t);
     },

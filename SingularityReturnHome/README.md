@@ -24,6 +24,7 @@ recovery uses the two-body modules in this directory: `simulation/orbit.py`,
 | `navigation/deadline.py` | Time until the orbit descends through a given altitude |
 | `telemetry/api.py` | HTTP API for the dashboard |
 | `telemetry/export_web.py` | Exports runs as playback data for the 3D site in `../web/` |
+| `worker/entry.py` | Cloudflare Python Worker for the 3D site: runs scenarios and asks Workers AI per request |
 | `dashboard/` | React dashboard |
 | `intelligence/` | LLM client (Cloudflare Workers AI, Ollama or OpenAI-compatible), recovery-proposal harness, check review, advisor |
 | `mission.py`, `control/` | One-shot two-body recovery script |
@@ -64,8 +65,26 @@ API endpoints:
 | `GET /api/run?scenario=NAME[&seed=N]` | Runs the scenario (or reuses a finished run): summary, track sampled every 1 s, controller events |
 | `GET /api/replay?scenario=NAME[&seed=N]` | The run's `replay.html` |
 
-3D site (`../web/`, singularos.willsarg.com): plays exported runs with the
-station, vehicle, thrusters and Earth to scale. The data is not committed.
+3D site (`../web/`, singularos.willsarg.com): plays runs with the station,
+vehicle, thrusters and Earth to scale. Deployed, the site is a Cloudflare
+Python Worker (`worker/entry.py`, bundled with the simulator packages by
+`../web/scripts/bundle-worker.mjs`):
+
+| Endpoint | Returns |
+|---|---|
+| `GET /api/scenarios` | Scenario names, expected outcomes, faults |
+| `GET /api/run?scenario=NAME[&seed=N]` | Runs the scenario in the Worker (random seed if omitted); playback data as written by `export_web`, plus `seed` |
+| `GET /api/advice?scenario=NAME&seed=N` | Re-runs the same scenario and seed, recording each decision context, then asks Workers AI through the Worker's AI binding; returns the `llm_advice` events |
+
+Advice never changes the run, so the advice for a seed belongs to the run
+`/api/run` returned for that seed; the site plays the run while advice is
+requested. Both routes are rate limited per client address (20 runs and 6
+advice requests per minute). The Worker needs the Workers Paid plan: a run
+takes more CPU than the free plan's 10 ms per request. Deploy from `../web/`
+with `pnpm run deploy`.
+
+Exported runs (below) are used by the tests, `pnpm run dev:static`, and the
+recorded-advice demo build. The data is not committed.
 After setting up the Python environment above, the site's development, test,
 and build commands regenerate it automatically:
 

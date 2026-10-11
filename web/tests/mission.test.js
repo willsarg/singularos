@@ -151,3 +151,17 @@ test('cinematic windows affect presentation speed only and support seeking backw
   playback.tick(2000);
   assert.equal(playback.time, 212);
 });
+
+test('live advice added after loading is revealed at its decision time and logged', () => {
+  const data = load('thruster_fault');
+  const run = createRun(data);
+  assert.equal(run.adviceAt(1e6), null);
+  run.addEvents([{ t: 194.8, type: 'llm_advice', source: 'controller', point: 'plan',
+    proposal: { mode: 'RETURN', plan: { action: 'COAST' }, rationale: 'Three thrusters remain available.' },
+    review: { deterministic_mode: 'RETURN', agrees_with_deterministic: true, checks: {}, failed: [] } }]);
+  assert.equal(run.adviceAt(194), null);
+  assert.equal(run.adviceAt(195).proposal.mode, 'RETURN');
+  const log = run.eventsUntil(195);
+  assert.equal(log.at(-1).type, 'llm_advice');
+  assert.ok(log.every((e, i) => i === 0 || log[i - 1].t <= e.t));
+});
