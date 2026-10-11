@@ -84,7 +84,8 @@ export function cameraPose(run, state, { mode = 'cinematic', aspect = 16 / 9, re
         distance = scale * (state.alt < 160 ? 12 : 9);
         break;
     }
-    distance *= portrait ? 1.3 : 1;
+    // Leave more breathing room around the vehicle and its exhaust.
+    distance *= (portrait ? 1.3 : 1) * 1.25;
     const view = direction(angle, elevation);
     const closePosition = target.map((value, i) => value + view[i] * distance);
     return {
