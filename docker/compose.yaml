@@ -1,0 +1,44 @@
+# SingularOS development environment.
+#
+# Two services:
+#   omarchy  - Omarchy (Arch + Hyprland) desktop in a QEMU VM, browser display
+#   llm      - llama.cpp llama-server with constrained-output support
+#
+# Copy .env.example to .env first. All ports bind to 127.0.0.1 only.
+
+services:
+  omarchy:
+    build:
+      context: ./omarchy
+      dockerfile: Dockerfile
+    image: singularos/omarchy:latest
+    ports:
+      - "127.0.0.1:${VNC_PORT:-8900}:8900"
+    environment:
+      - MEMORY=${MEMORY:-8G}
+      - CPUS=${CPUS:-4}
+    volumes:
+      - omarchy-data:/data
+      - ./shared:/shared
+    restart: unless-stopped
+
+  llm:
+    build:
+      context: ./llm
+      dockerfile: Dockerfile
+    image: singularos/llm:latest
+    ports:
+      - "127.0.0.1:${LLM_PORT:-8080}:8080"
+    volumes:
+      - ./models:/models:ro
+    entrypoint: ["/app/llama-server"]
+    command: >
+      -m /models/${LLM_MODEL}
+      --host 0.0.0.0 --port 8080
+      --jinja
+      --ctx-size ${LLM_CTX_SIZE:-8192}
+      --parallel ${LLM_PARALLEL:-4}
+    restart: unless-stopped
+
+volumes:
+  omarchy-data:

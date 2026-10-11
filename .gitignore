@@ -69,3 +69,9 @@ tmp/
 # Personal/internal notes (not for public repo)
 *.internal.md
 /notes/
+
+# Docker runtime artifacts
+docker/models/
+docker/shared/
+*.qcow2
+*.iso
