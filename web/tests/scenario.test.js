@@ -9,7 +9,7 @@ import * as mission from '../src/mission.js';
 function pageLoader() {
   const nodes = new Map();
   const element = () => ({
-    style: { setProperty() {} }, append() {}, addEventListener() {},
+    style: { setProperty() {} }, append() {}, addEventListener() {}, setAttribute() {},
     replaceChildren() {}, querySelectorAll() { return []; },
   });
   const $ = (id) => {

@@ -35,6 +35,12 @@ keeps the station and flown path in frame. The view buttons switch between them;
 so seeking and paused frames are reproducible. Reduced motion disables camera
 drift and impact particles.
 
+Scenario highlight buttons jump to an impact, fault, or descent. Cinematic
+playback caps the selected speed at 2× from three seconds before a recorded
+strike until five seconds after it, then resumes the selected speed. Overview
+and reduced-motion playback keep the selected constant speed. Seeking and
+paused scenes use mission time throughout.
+
 `pnpm dev`, `pnpm test`, and `pnpm build` regenerate the ignored files in
 `web/public/runs/` before running. `pnpm run export-runs` regenerates them
 explicitly after simulator changes while a development server is already open.
@@ -95,9 +101,22 @@ and deploys its static assets to the custom domain configured in
 - `web/src/visuals/` supplies the layered Earth shaders, detailed spacecraft,
   and procedural material textures. Effects use mission time so seeking and
   paused frames remain reproducible. Texture arrivals refresh paused views.
-- Impact particles and the glow below 160 km are illustrative effects, not
-  simulated debris or a calculated heating model. Exhaust follows delivered
-  thrust from the run.
+- The spacecraft has thermal blanket seams, cooling ribs, service piping,
+  instruments, and thruster bells. Station components have structural trusses,
+  segmented solar panels, service decks, and docking locks. Static details are
+  merged by material; station footprints match the simulator's rectangles.
+- A procedural crescent Moon and Sun join the Earth backdrop. Their nominal
+  angular sizes use [NASA Moon facts](https://science.nasa.gov/moon/facts/) and
+  [Sun data](https://radiojove.gsfc.nasa.gov/education/sun/basics/material/sunfacts.htm).
+  Sky directions are illustrative, without a date-dependent ephemeris.
+- Recorded truth impacts trigger an incoming meteoroid, a brief contact flash,
+  directional sparks, tumbling fragments, and persistent scorch marks. Object
+  size, contact location, and co-moving fragments are illustrations; the
+  simulator exports impulse and spin rather than debris or damage physics.
+  Thruster faults without a recorded impact do not produce a meteor strike.
+  Reduced motion suppresses moving impact effects and the flash. The glow below
+  160 km illustrates reentry, rather than calculated heating. Exhaust follows
+  delivered thrust from the run.
 - `web/src/main.js` connects playback to the accessible HTML controls and log.
 - Vite bundles the dependencies into `web/dist`, which is ignored by Git.
 - Google Fonts supplies the typefaces, with local font fallbacks.

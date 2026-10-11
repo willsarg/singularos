@@ -65,8 +65,26 @@ export function createSpacecraft(textures, { wings = true } = {}) {
     add(new THREE.CylinderGeometry(top, bottom, length, segments), material, position, rotation);
   const ring = (radius, thickness, material, position, rotation) =>
     add(new THREE.TorusGeometry(radius, thickness, 8, 48), material, position, rotation);
+  const pipe = (start, end, radius, material = 'silver') => {
+    const a = new THREE.Vector3(...start), b = new THREE.Vector3(...end);
+    const direction = b.clone().sub(a);
+    const geometry = new THREE.CylinderGeometry(radius, radius, direction.length(), 8);
+    geometry.applyQuaternion(new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), direction.normalize()));
+    add(geometry, material, a.add(b).multiplyScalar(0.5).toArray());
+  };
 
   cylinder(0.42, 0.42, 0.92, 'foil', [0, 0, -0.18]);
+  // Overlapping thermal blankets expose physical seams under grazing light.
+  for (let row = 0; row < 3; row++) for (let panel = 0; panel < 12; panel++) {
+    const angle = panel * Math.PI / 6;
+    add(new THREE.CylinderGeometry(0.426, 0.426, 0.286, 8, 1, true, angle + 0.018, Math.PI / 6 - 0.036),
+      'foil', [0, 0, -0.48 + row * 0.3], [Math.PI / 2, 0, 0]);
+    const seamAngle = angle + Math.PI / 12;
+    for (const dz of [-0.12, 0.12]) {
+      add(new THREE.SphereGeometry(0.011, 6, 4), 'dark',
+        [Math.sin(seamAngle) * 0.432, Math.cos(seamAngle) * 0.432, -0.48 + row * 0.3 + dz]);
+    }
+  }
   cylinder(0.43, 0.45, 0.22, 'dark', [0, 0, -0.65]);
   cylinder(0.39, 0.42, 0.26, 'hull', [0, 0, 0.39]);
   const capsuleProfile = [[0.39, 0], [0.39, 0.08], [0.35, 0.2], [0.28, 0.31], [0.14, 0.4], [0.035, 0.42]];
@@ -74,6 +92,14 @@ export function createSpacecraft(textures, { wings = true } = {}) {
   cylinder(0.17, 0.17, 0.08, 'dark', [0, 0, 0.88]);
   ring(0.175, 0.018, 'silver', [0, 0, 0.93]);
   cylinder(0.12, 0.12, 0.012, 'glass', [0, 0, 0.933]);
+  for (let i = 0; i < 8; i++) {
+    const angle = i * Math.PI / 4;
+    const x = Math.sin(angle), y = Math.cos(angle);
+    box([0.035, 0.075, 0.022], 'dark', [x * 0.149, y * 0.149, 0.916], [0, 0, -angle]);
+    add(new THREE.SphereGeometry(0.01, 6, 4), 'silver', [x * 0.158, y * 0.158, 0.937]);
+    // Capsule panel joints follow the taper towards the optical docking head.
+    pipe([x * 0.379, y * 0.379, 0.57], [x * 0.271, y * 0.271, 0.8], 0.006, 'dark');
+  }
   for (const z of [-0.6, -0.38, 0.05, 0.27, 0.52]) ring(0.423, 0.018, 'silver', [0, 0, z]);
   for (let i = 0; i < 12; i++) {
     const a = i / 12 * Math.PI * 2;
@@ -88,6 +114,16 @@ export function createSpacecraft(textures, { wings = true } = {}) {
     cylinder(0.065, 0.065, 0.17, 'dark', [side * 0.24, 0.43, 0.35]);
     cylinder(0.048, 0.048, 0.01, 'glass', [side * 0.24, 0.43, 0.44]);
     box([0.035, 0.025, 0.025], 'indicator', [side * 0.2, 0.468, 0.24]);
+    // Exposed service loops, mounting feet, and sunshaded star trackers.
+    for (const y of [-0.17, 0.17]) {
+      pipe([side * 0.44, y, -0.47], [side * 0.53, y, -0.4], 0.012, 'foil');
+      pipe([side * 0.53, y, -0.4], [side * 0.53, y, 0.12], 0.012, 'foil');
+      pipe([side * 0.53, y, 0.12], [side * 0.44, y, 0.18], 0.012, 'foil');
+      for (const z of [-0.35, -0.1, 0.1]) box([0.042, 0.046, 0.032], 'dark', [side * 0.53, y, z]);
+    }
+    cylinder(0.07, 0.07, 0.08, 'silver', [side * 0.24, 0.43, 0.413]);
+    cylinder(0.061, 0.061, 0.045, 'dark', [side * 0.24, 0.43, 0.439]);
+    for (const dx of [-0.048, 0.048]) box([0.018, 0.022, 0.07], 'silver', [side * 0.24 + dx, 0.39, 0.405]);
     // Hinged booms and three independently framed panels per wing.
     for (let section = 0; wings && section < 3; section++) {
       if (section === 0) {
@@ -105,17 +141,36 @@ export function createSpacecraft(textures, { wings = true } = {}) {
       box([0.12, 0.13, 0.12], 'foil', [side * 0.39, y, -0.54]);
       cylinder(0.035, 0.065, 0.1, 'dark', [side * 0.45, y, -0.58], [0, 0, side * Math.PI / 2]);
     }
+    // The lateral delivered-thrust plumes originate at these central bells.
+    box([0.09, 0.17, 0.16], 'foil', [side * 0.405, 0, -0.56]);
+    cylinder(0.066, 0.03, 0.1, 'dark', [side * 0.45, 0, -0.56], [0, 0, -side * Math.PI / 2], 24);
+    ring(0.061, 0.007, 'silver', [side * 0.495, 0, -0.56], [0, Math.PI / 2, 0]);
+    pipe([side * 0.39, -0.24, -0.55], [side * 0.39, 0.24, -0.55], 0.011);
   }
   const engineProfile = [[0.095, 0.12], [0.1, 0.04], [0.13, -0.02], [0.2, -0.11], [0.245, -0.22]];
   add(new THREE.LatheGeometry(engineProfile.map(([x, y]) => new THREE.Vector2(x, y)), 48), 'dark', [0, 0, -0.66], [Math.PI / 2, 0, 0]);
   ring(0.243, 0.014, 'silver', [0, 0, -0.88]);
   for (let i = 0; i < 3; i++) ring(0.17 + i * 0.026, 0.008, 'silver', [0, 0, -0.77 - i * 0.04]);
+  // Regenerative cooling ribs and feed lines around the main engine skirt.
+  for (let i = 0; i < 24; i++) {
+    const angle = i * Math.PI / 12;
+    const x = Math.sin(angle), y = Math.cos(angle);
+    pipe([x * 0.105, y * 0.105, -0.63], [x * 0.142, y * 0.142, -0.73], 0.006);
+    pipe([x * 0.142, y * 0.142, -0.73], [x * 0.237, y * 0.237, -0.867], 0.006);
+    if (i % 4 === 0) pipe([x * 0.36, y * 0.36, -0.56], [x * 0.13, y * 0.13, -0.73], 0.014);
+  }
+  cylinder(0.085, 0.085, 0.09, 'silver', [0, 0, -0.65]);
+  ring(0.087, 0.009, 'foil', [0, 0, -0.69]);
   // Communication dish, feed, and two instrument antennae.
   cylinder(0.025, 0.045, 0.27, 'silver', [0, 0.5, -0.19], [0, 0, 0]);
   const dishProfile = [[0.01, -0.045], [0.07, -0.04], [0.14, -0.01], [0.22, 0.04], [0.27, 0.085]];
   add(new THREE.LatheGeometry(dishProfile.map(([x, y]) => new THREE.Vector2(x, y)), 48), 'silver', [0, 0.66, -0.19]);
   cylinder(0.009, 0.009, 0.24, 'silver', [0, 0.76, -0.19], [0, 0, 0]);
   add(new THREE.SphereGeometry(0.03, 12, 8), 'dark', [0, 0.89, -0.19]);
+  for (let i = 0; i < 3; i++) {
+    const angle = i * Math.PI * 2 / 3;
+    pipe([Math.sin(angle) * 0.23, 0.725, -0.19 + Math.cos(angle) * 0.23], [0, 0.86, -0.19], 0.007);
+  }
   for (const side of [-1, 1]) {
     cylinder(0.009, 0.014, 0.66, 'silver', [side * 0.3, 0.67, -0.42], [0, 0, side * -0.2]);
     add(new THREE.SphereGeometry(0.017, 8, 6), 'indicator', [side * 0.365, 0.99, -0.42]);
@@ -125,6 +180,7 @@ export function createSpacecraft(textures, { wings = true } = {}) {
     const geometry = mergeGeometries(geometries);
     for (const part of geometries) part.dispose();
     const mesh = new THREE.Mesh(geometry, materials[name]);
+    mesh.name = `Spacecraft ${name}`;
     mesh.castShadow = mesh.receiveShadow = true;
     craft.add(mesh);
   }
@@ -137,6 +193,7 @@ export function createSpacecraft(textures, { wings = true } = {}) {
     left: jet([-0.5, 0, -0.56], [-1, 0, 0], [[0.9, 0.1, 0x51a9ff], [0.6, 0.04, 0xd4eaff]]),
     right: jet([0.5, 0, -0.56], [1, 0, 0], [[0.9, 0.1, 0x51a9ff], [0.6, 0.04, 0xd4eaff]]),
   };
+  for (const [name, group] of Object.entries(jets)) group.name = `${name} exhaust`;
   craft.add(...Object.values(jets));
   const plumes = Object.values(jets).flatMap((group) => group.children);
   const engineLight = new THREE.PointLight(0x75baff, 0, 3, 2);

@@ -83,7 +83,8 @@ function updateUI(time) {
   $('phase').textContent = phaseLabel(state.phase).toUpperCase();
   $('leg').textContent = (state.leg || '-').toUpperCase();
   $('clearance').textContent = formatDistance(Math.max(0, state.clear));
-  $('scene-caption').textContent = CAPTIONS[state.phase] ?? '';
+  const strike = run.events.find((e) => e.source === 'truth' && e.type === 'impact' && time >= e.t && time < e.t + 5);
+  $('scene-caption').textContent = strike ? strike.text : CAPTIONS[state.phase] ?? '';
   $('thrusters').replaceChildren(...run.data.thrusters.flatMap((name) => {
     const dt = document.createElement('dt');
     dt.textContent = name;
@@ -134,7 +135,8 @@ function updateUI(time) {
   $('play').setAttribute('aria-label', playback.playing ? 'Pause mission' : 'Play mission');
   $('play-text').textContent = playback.playing ? 'Pause' : 'Play';
   $('play-icon').textContent = playback.playing ? 'Ⅱ' : '▷';
-  $('playback-status').textContent = contextLost ? '3D VIEW INTERRUPTED' : playback.playing ? `PLAYING AT ${playback.speed}x` : 'PAUSED';
+  $('playback-status').textContent = contextLost ? '3D VIEW INTERRUPTED' : playback.playing
+    ? `${playback.effectiveSpeed < playback.speed ? 'IMPACT SEQUENCE' : 'PLAYING AT'} ${playback.effectiveSpeed}x` : 'PAUSED';
 }
 
 function render() {
@@ -166,6 +168,7 @@ function schedule() {
 function frame(now) {
   request = null;
   if (document.hidden || contextLost || !playback.playing) return;
+  playback.windows = viewMode === 'cinematic' && !reduceMotion.matches ? run.impactWindows : [];
   playback.tick(now);
   render();
   schedule();
@@ -228,6 +231,22 @@ async function loadScenario(name, frozen = null) {
     return li;
   }));
   phaseButtons = [...$('phases').querySelectorAll('button')];
+  const moments = run.events.filter((e) => e.source === 'truth' && ['impact', 'reentry', 'thruster_fault'].includes(e.type))
+    .filter((e, i, events) => e.type !== 'thruster_fault' || !events.some((hit) => hit.type === 'impact' && Math.abs(hit.t - e.t) < 0.5));
+  $('key-moments').replaceChildren(...moments.map((event) => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    const name = event.type === 'impact' ? 'Watch impact' : event.type === 'reentry' ? 'Watch descent' : 'Watch fault';
+    button.textContent = `${name} ↗`;
+    button.setAttribute('aria-label', `${name} at ${formatMET(event.t)}`);
+    button.addEventListener('click', () => {
+      playback.seek(Math.max(0, event.t - (event.type === 'reentry' ? 15 : 3)));
+      setViewMode('cinematic');
+      setPlaying(true);
+    });
+    return button;
+  }));
+  $('key-moments').hidden = moments.length === 0;
   const url = new URL(location.href);
   url.searchParams.set('scenario', name);
   history.replaceState(null, '', url);

@@ -8,6 +8,12 @@ const load = (name) => createRun(JSON.parse(readFileSync(new URL(`../public/runs
 const position = (state) => [state.y, state.x, 0];
 const distance = (a, b) => Math.hypot(...a.map((value, i) => value - b[i]));
 
+test('opening cinematic shot centers the station footprint with the docked vehicle', () => {
+  const run = load('nominal');
+  const pose = cameraPose(run, run.sample(0), { aspect: 16 / 9 });
+  assert.equal(pose.target[1], -7.5);
+});
+
 test('cinematic inspection brings the actual vehicle into a close tracking shot', () => {
   const run = load('thruster_fault');
   const state = run.sample(120);
@@ -63,4 +69,26 @@ test('portrait and reduced-motion views retain finite camera frames', () => {
       assert.ok(distance(pose.position, pose.target) > run.data.vehicle_radius_m * 2);
     }
   }
+});
+
+test('recorded impacts receive smoothly entered close camera emphasis', () => {
+  const run = load('orbital_strike_return');
+  const time = run.data.events.find((event) => event.type === 'impact').t;
+  const impact = cameraPose(run, run.sample(time), { aspect: 16 / 9 });
+  assert.equal(impact.title, 'Recorded impact');
+  assert.ok(distance(impact.target, position(run.sample(time))) < 1);
+  assert.ok(distance(impact.position, impact.target) < 10);
+  for (const edge of [time - 3, time, time + 2, time + 6]) {
+    const before = cameraPose(run, run.sample(edge - 0.001));
+    const after = cameraPose(run, run.sample(edge + 0.001));
+    assert.ok(distance(before.position, after.position) < 0.5, `impact camera jumps at ${edge}`);
+  }
+});
+
+test('impact focus does not change overview or add effects to fault-only runs', () => {
+  const run = load('orbital_strike_return'), state = run.sample(160);
+  const plain = { ...run, data: { ...run.data, events: run.data.events.filter((e) => e.type !== 'impact') } };
+  assert.deepEqual(cameraPose(run, state, { mode: 'overview' }), cameraPose(plain, state, { mode: 'overview' }));
+  assert.deepEqual(cameraPose(run, state, { reducedMotion: true }), cameraPose(plain, state, { reducedMotion: true }));
+  assert.notEqual(cameraPose(plain, state).title, 'Recorded impact');
 });

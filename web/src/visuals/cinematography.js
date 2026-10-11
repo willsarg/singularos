@@ -1,4 +1,5 @@
 import { clamp } from '../mission.js';
+import { impactEvents, impactEnvelope } from './impact-timing.js';
 
 const ease = (value) => { const k = clamp(value); return k * k * (3 - 2 * k); };
 const mix = (a, b, k) => a + (b - a) * k;
@@ -17,7 +18,9 @@ export function cameraPose(run, state, { mode = 'cinematic', aspect = 16 / 9, re
   const halfFov = Math.min(fov * Math.PI / 360, Math.atan(Math.tan(fov * Math.PI / 360) * aspect));
   const vehicle = [state.y, state.x, 0];
   const radius = Math.max(portrait ? 30 : 24, state.frame * 1.1);
-  const overviewTarget = [vehicle[0] * 0.5 - (portrait ? 0 : radius * 0.12), vehicle[1] * 0.5, 0];
+  const stationRadial = run.data.station.flatMap((component) => [component.min_m[0], component.max_m[0]]);
+  const centreRadial = (Math.min(...stationRadial, vehicle[1]) + Math.max(...stationRadial, vehicle[1])) / 2;
+  const overviewTarget = [vehicle[0] * 0.5 - (portrait ? 0 : radius * 0.12), centreRadial, 0];
   const overviewDistance = radius / Math.sin(halfFov);
   const wideDirection = direction(0.18, 0.34);
   const overview = {
@@ -93,14 +96,40 @@ export function cameraPose(run, state, { mode = 'cinematic', aspect = 16 / 9, re
       target: blend(target, overview.target, wide), fov, detail: 1 - wide, title,
     };
   };
-  const current = recipe(phase, end);
-  if (phaseIndex === 0) return current;
-  const previous = recipe(run.phaseStarts[phaseIndex - 1], phase.t);
-  const transition = ease((state.t - phase.t) / Math.min(18, Math.max(1, (end - phase.t) * 0.2)));
+  let current = recipe(phase, end);
+  if (phaseIndex > 0) {
+    const previous = recipe(run.phaseStarts[phaseIndex - 1], phase.t);
+    const transition = ease((state.t - phase.t) / Math.min(18, Math.max(1, (end - phase.t) * 0.2)));
+    current = {
+      ...current,
+      position: blend(previous.position, current.position, transition),
+      target: blend(previous.target, current.target, transition),
+      detail: mix(previous.detail, current.detail, transition),
+    };
+  }
+  if (reducedMotion) return current;
+  // Ease into a readable view of the struck side. The impulse defines only a
+  // viewing direction: this shot never moves or rotates the simulated craft.
+  const impacts = impactEvents(run);
+  let focus = 0, hit;
+  for (const event of impacts) {
+    const weight = impactEnvelope(state.t - event.t).focus;
+    if (weight > focus) { focus = weight; hit = event; }
+  }
+  if (!hit) return current;
+  const dv = hit.delta_v_m_s ?? [0, -1];
+  const impulse = Math.hypot(dv[0] ?? 0, dv[1] ?? 0);
+  const view = impulse > 0
+    ? [-(dv[1] ?? 0) / impulse, -(dv[0] ?? 0) / impulse, 0.9].map((value) => value / Math.hypot(1, 0.9))
+    : direction(0.92, 0.3);
+  const target = [vehicle[0], vehicle[1], 0];
+  const distance = scale * (portrait ? 11.5 : 9.5);
+  const position = target.map((value, i) => value + view[i] * distance);
   return {
     ...current,
-    position: blend(previous.position, current.position, transition),
-    target: blend(previous.target, current.target, transition),
-    detail: mix(previous.detail, current.detail, transition),
+    position: blend(current.position, position, focus),
+    target: blend(current.target, target, focus),
+    detail: mix(current.detail, 1, focus),
+    title: focus > 0.65 ? (state.t < hit.t ? 'Impact approach' : state.t < hit.t + 2 ? 'Recorded impact' : 'Impact aftermath') : current.title,
   };
 }

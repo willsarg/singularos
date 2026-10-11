@@ -89,6 +89,13 @@ export function createRun(data) {
   const events = data.events
     .map((e) => ({ ...e, text: eventText(e) }))
     .filter((e) => e.text);
+  const impactWindows = [];
+  for (const hit of events.filter((e) => e.type === 'impact' && e.source === 'truth').sort((a, b) => a.t - b.t)) {
+    const window = { start: Math.max(0, hit.t - 3), end: Math.min(duration, hit.t + 5) };
+    const previous = impactWindows.at(-1);
+    if (previous && previous.end >= window.start) previous.end = Math.max(previous.end, window.end);
+    else impactWindows.push(window);
+  }
 
   // Camera framing radius: the extent of vehicle and station over a window
   // around each sample, so the view eases out before large motions.
@@ -109,7 +116,7 @@ export function createRun(data) {
   });
 
   return {
-    data, duration, events, phaseStarts, bounds,
+    data, duration, events, phaseStarts, bounds, impactWindows,
     description: data.description,
     sample(time) {
       const t = clamp(time, 0, duration);
@@ -152,11 +159,31 @@ export function createPlayback(duration, initialTime, initiallyPlaying, speed) {
   let previous = null;
   return {
     speed,
+    windows: [],
+    get effectiveSpeed() { return this.windows.some((w) => time >= w.start && time < w.end) ? Math.min(this.speed, 2) : this.speed; },
     get time() { return Math.min(time, duration); },
     get playing() { return playing; },
     tick(now) {
       if (playing && previous !== null) {
-        time += Math.max(0, now - previous) / 1000 * this.speed;
+        let seconds = Math.max(0, now - previous) / 1000;
+        // Integrate through each boundary: a long frame at 50x must not skip
+        // the slower collision sequence. Only presentation time is affected.
+        for (const window of this.windows) {
+          if (time >= window.end) continue;
+          if (time < window.start) {
+            const before = Math.min(seconds, (window.start - time) / this.speed);
+            time += before * this.speed;
+            seconds -= before;
+          }
+          if (time >= window.start && seconds > 0) {
+            const speed = Math.min(this.speed, 2);
+            const inside = Math.min(seconds, (window.end - time) / speed);
+            time += inside * speed;
+            seconds -= inside;
+          }
+          if (seconds <= 0) break;
+        }
+        time += seconds * this.speed;
         // Hold the final state briefly, then loop.
         if (time > duration + 3 * this.speed) time = 0;
       }

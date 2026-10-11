@@ -125,3 +125,29 @@ test('playback advances at the chosen speed and loops after the end', () => {
   playback.tick(14000);
   assert.equal(playback.time, 0);
 });
+
+test('cinematic playback cannot skip a strike window at high speed or after a long frame', () => {
+  const playback = createPlayback(500, 150, true, 50);
+  playback.windows = [{ start: 157, end: 165 }];
+  playback.tick(0);
+  playback.tick(1000);
+  assert.ok(Math.abs(playback.time - 158.72) < 1e-9);
+  playback.seek(150);
+  playback.tick(0);
+  playback.tick(6000);
+  assert.ok(Math.abs(playback.time - 258) < 1e-9);
+});
+
+test('cinematic windows affect presentation speed only and support seeking backwards', () => {
+  const playback = createPlayback(500, 160, true, 1);
+  playback.windows = [{ start: 157, end: 165 }];
+  playback.tick(0); playback.tick(1000);
+  assert.equal(playback.time, 161);
+  playback.speed = 50;
+  playback.seek(160);
+  playback.tick(0); playback.tick(1000);
+  assert.equal(playback.time, 162);
+  playback.windows = [];
+  playback.tick(2000);
+  assert.equal(playback.time, 212);
+});

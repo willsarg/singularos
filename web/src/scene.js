@@ -3,11 +3,13 @@ import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
-import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import { canvasTexture, randomGenerator, surfaceTextures } from './visuals/textures.js';
 import { createEarth } from './visuals/earth.js';
 import { createSpacecraft } from './visuals/spacecraft.js';
 import { cameraPose } from './visuals/cinematography.js';
+import { createStation } from './visuals/station.js';
+import { createCelestialBackdrop, SUN_DIRECTION } from './visuals/celestial.js';
+import { createImpactEffects } from './visuals/impacts.js';
 
 // Units are metres in the station frame of the simulator. Scene axes: +X is
 // along-track (sim +y), +Y is radial, away from Earth (sim +x), +Z is the
@@ -19,84 +21,6 @@ const toScene = (x, y) => v(y, x, 0);
 // Earth is drawn in its own pass, shrunk about the camera by EARTH_SCALE:
 // apparent size and direction are exact, depth stays in range.
 const EARTH_SCALE = 1e-3;
-
-function buildStation(components, textures) {
-  const station = new THREE.Group();
-  const materials = {
-    hull: new THREE.MeshStandardMaterial({ map: textures.hull, color: 0xe7e5df, metalness: 0.48, roughness: 0.38 }),
-    foil: new THREE.MeshStandardMaterial({ color: 0xd5a453, metalness: 0.88, roughness: 0.42, bumpMap: textures.foil, bumpScale: 0.045 }),
-    silver: new THREE.MeshStandardMaterial({ color: 0xbcc5cd, metalness: 0.85, roughness: 0.25 }),
-    solar: new THREE.MeshPhysicalMaterial({ map: textures.solar, color: 0xcedfff, metalness: 0.6, roughness: 0.28, clearcoat: 0.8, clearcoatRoughness: 0.2 }),
-    radiator: new THREE.MeshStandardMaterial({ color: 0xdfe6ea, metalness: 0.2, roughness: 0.55 }),
-    port: new THREE.MeshBasicMaterial({ color: new THREE.Color(0.18, 1.8, 1.55) }),
-  };
-  for (const c of components) {
-    // Footprint in the orbital plane is the sim's rectangle exactly; depth
-    // along the orbit normal is not simulated and is chosen for looks.
-    const [x0, y0] = c.min_m;
-    const [x1, y1] = c.max_m;
-    const width = y1 - y0; // along-track
-    const height = x1 - x0; // radial
-    const centre = toScene((x0 + x1) / 2, (y0 + y1) / 2);
-    let mesh;
-    if (c.type === 'hull') {
-      mesh = new THREE.Mesh(new THREE.CylinderGeometry(width / 2, width / 2, height, 64), materials.hull);
-      const bands = new THREE.Group();
-      for (let i = 1; i < 4; i++) {
-        const band = new THREE.Mesh(new THREE.TorusGeometry(width / 2, 0.06, 8, 64), materials.silver);
-        band.rotation.x = Math.PI / 2;
-        band.position.y = -height / 2 + (height * i) / 4;
-        bands.add(band);
-      }
-      mesh.add(bands);
-      const bolts = new THREE.InstancedMesh(new THREE.SphereGeometry(0.045, 8, 6), materials.silver, 36);
-      const fastener = new THREE.Object3D();
-      for (let i = 0; i < 36; i++) {
-        const angle = (i % 12) / 12 * Math.PI * 2;
-        fastener.position.set(Math.sin(angle) * (width / 2 + 0.015), -height / 2 + height * (Math.floor(i / 12) + 1) / 4, Math.cos(angle) * (width / 2 + 0.015));
-        fastener.updateMatrix();
-        bolts.setMatrixAt(i, fastener.matrix);
-      }
-      mesh.add(bolts);
-    } else if (c.type === 'docking_port') {
-      mesh = new THREE.Mesh(new THREE.CylinderGeometry(width / 2, width / 2, height, 48), materials.foil);
-      const ring = new THREE.Mesh(new THREE.TorusGeometry(width / 2, 0.05, 8, 48), materials.port);
-      ring.rotation.x = Math.PI / 2;
-      ring.position.y = height / 2;
-      mesh.add(ring);
-    } else if (c.type === 'solar_array') {
-      mesh = new THREE.Mesh(new RoundedBoxGeometry(width, height, 0.12, 2, 0.04), materials.solar);
-      const frame = new THREE.Mesh(new THREE.BoxGeometry(width + 0.1, 0.08, 0.16), materials.silver);
-      for (const dy of [-height / 2, height / 2]) {
-        const edge = frame.clone();
-        edge.position.y = dy;
-        mesh.add(edge);
-      }
-      for (const dx of [-width / 2, width / 2]) {
-        const edge = new THREE.Mesh(new THREE.BoxGeometry(0.08, height, 0.16), materials.silver);
-        edge.position.x = dx;
-        mesh.add(edge);
-      }
-    } else if (c.type === 'radiator') {
-      mesh = new THREE.Mesh(new RoundedBoxGeometry(width, height, 0.2, 2, 0.06), materials.radiator);
-      const seams = new THREE.InstancedMesh(new THREE.BoxGeometry(0.025, height * 0.9, 0.015), materials.silver, 24);
-      const seam = new THREE.Object3D();
-      for (let i = 0; i < 24; i++) {
-        seam.position.set(-width / 2 + width * (i + 0.5) / 24, 0, 0.11);
-        seam.updateMatrix();
-        seams.setMatrixAt(i, seam.matrix);
-      }
-      mesh.add(seams);
-    } else {
-      mesh = new THREE.Mesh(new RoundedBoxGeometry(width, height, Math.min(width, height), 2, 0.08), materials.foil);
-    }
-    mesh.position.copy(centre);
-    mesh.traverse((part) => { if (part.isMesh) part.castShadow = part.receiveShadow = true; });
-    mesh.userData.component = c.name;
-    station.add(mesh);
-  }
-  return station;
-}
 
 function ringSet(color, opacity) {
   const group = new THREE.Group();
@@ -125,7 +49,7 @@ export function createScene(canvas, { invalidate = () => {}, onTextureError = ()
   for (const texture of [textures.solar, textures.hull, textures.foil]) {
     texture.anisotropy = Math.min(renderer.capabilities.getMaxAnisotropy(), 8);
   }
-  const sunDirection = v(-0.55, 0.62, 0.56).normalize();
+  const sunDirection = SUN_DIRECTION.clone();
 
   // Background pass: stars and a true-scale Earth below the station's orbit.
   const background = new THREE.Scene();
@@ -158,18 +82,20 @@ export function createScene(canvas, { invalidate = () => {}, onTextureError = ()
     transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
   }));
   background.add(stars);
+  const sky = createCelestialBackdrop(textures.moon);
+  background.add(sky.group);
 
   // Foreground pass: station, vehicle, tracks.
   const scene = new THREE.Scene();
   const camera = new THREE.PerspectiveCamera(37, 1, 0.1, 1e6);
-  scene.add(new THREE.AmbientLight(0x6a8bb5, 0.13));
+  scene.add(new THREE.AmbientLight(0x6a8bb5, 0.34));
   const sun = new THREE.DirectionalLight(0xfff2dc, 3.1);
   sun.castShadow = true;
   sun.shadow.mapSize.set(2048, 2048);
   sun.shadow.bias = -0.00015;
   sun.shadow.normalBias = 0.02;
   scene.add(sun, sun.target);
-  const earthshine = new THREE.DirectionalLight(0x789bcf, 0.6);
+  const earthshine = new THREE.DirectionalLight(0x789bcf, 0.9);
   earthshine.position.set(0, -1, 0.2);
   scene.add(earthshine, earthshine.target);
   const rim = new THREE.DirectionalLight(0x75b9e9, 1.2);
@@ -193,7 +119,7 @@ export function createScene(canvas, { invalidate = () => {}, onTextureError = ()
     environment?.dispose();
     environment = pmrem.fromEquirectangular(reflection);
     scene.environment = environment.texture;
-    scene.environmentIntensity = 0.65;
+    scene.environmentIntensity = 0.85;
   }
   restoreEnvironment();
 
@@ -221,20 +147,8 @@ export function createScene(canvas, { invalidate = () => {}, onTextureError = ()
   let run = null;
   let flown = null;
   let viewMode = 'cinematic';
-  const impactGeometry = new THREE.BufferGeometry();
-  const impactPositions = new Float32Array(96 * 3);
-  impactGeometry.setAttribute('position', new THREE.BufferAttribute(impactPositions, 3));
-  const impactRandom = randomGenerator(114);
-  const debris = Array.from({ length: 96 }, () => ({
-    angle: impactRandom() * Math.PI * 2, speed: 0.2 + impactRandom() * 0.5,
-    depth: impactRandom() * 0.8 - 0.4,
-  }));
-  const impact = new THREE.Points(impactGeometry, new THREE.PointsMaterial({
-    color: 0xffd7a4, size: 0.018, map: starSprite, transparent: true,
-    depthWrite: false, blending: THREE.AdditiveBlending,
-  }));
-  impact.frustumCulled = false;
-  scene.add(impact);
+  const impacts = createImpactEffects();
+  scene.add(impacts.group);
   const estimate = new THREE.Mesh(new THREE.OctahedronGeometry(1), new THREE.MeshBasicMaterial({ color: AMBER, wireframe: true, transparent: true }));
   const estimateRings = ringSet(AMBER, 0.55);
   const dock = ringSet(CYAN, 0.35);
@@ -261,6 +175,7 @@ export function createScene(canvas, { invalidate = () => {}, onTextureError = ()
 
   function setRun(next) {
     run = next;
+    impacts.setRun(run);
     const { data } = run;
     if (station) {
       scene.remove(station);
@@ -272,7 +187,7 @@ export function createScene(canvas, { invalidate = () => {}, onTextureError = ()
       geometries.forEach((geometry) => geometry.dispose());
       materials.forEach((material) => material.dispose());
     }
-    station = buildStation(data.station, textures);
+    station = createStation(data.station, textures);
     scene.add(station);
     // The wingless model spans about 2 units; match the sim's vehicle disc.
     craft.scale.setScalar(data.vehicle_radius_m);
@@ -380,21 +295,7 @@ export function createScene(canvas, { invalidate = () => {}, onTextureError = ()
     estimateRings.children.forEach((ring) => { ring.material.opacity = 0.55 * (1 - shot.detail * 0.8); });
     dock.children.forEach((ring) => { ring.material.opacity = 0.35 * (1 - shot.detail * 0.85); });
 
-    const hit = run.data.events.find((event) => event.type === 'impact' && time >= event.t && time < event.t + 8);
-    impact.visible = Boolean(hit) && !reducedMotion;
-    if (hit) {
-      const origin = run.sample(hit.t);
-      const age = (time - hit.t) / 8;
-      impact.position.copy(toScene(origin.x, origin.y));
-      impact.material.opacity = (1 - age) ** 2;
-      debris.forEach((particle, i) => {
-        const travel = age * particle.speed * run.data.vehicle_radius_m * 6;
-        impactPositions[i * 3] = Math.cos(particle.angle) * travel;
-        impactPositions[i * 3 + 1] = Math.sin(particle.angle) * travel;
-        impactPositions[i * 3 + 2] = particle.depth * travel;
-      });
-      impactGeometry.attributes.position.needsUpdate = true;
-    }
+    impacts.update({ time, state, origin: craft.position, craftQuaternion: craft.quaternion, camera, detail: shot.detail, reducedMotion });
 
     // The Earth turns under the station once per orbit: the frame co-rotates.
     const n = 2 * Math.PI / run.data.orbit.period_s;
@@ -402,6 +303,7 @@ export function createScene(canvas, { invalidate = () => {}, onTextureError = ()
     backgroundCamera.quaternion.copy(camera.quaternion);
     backgroundCamera.position.set(0, 0, 0);
     earthPivot.position.copy(earthCentre).sub(worldCamera).multiplyScalar(EARTH_SCALE);
+    sky.update(time, earthCentre, worldCamera, backgroundCamera);
 
     const radius = viewMode === 'overview' ? Math.max(24, distance * Math.sin(shot.fov * Math.PI / 360)) : Math.max(5, distance * 0.7);
     const shadowsOn = radius < 200;
