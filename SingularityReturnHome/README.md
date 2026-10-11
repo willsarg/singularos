@@ -65,16 +65,18 @@ API endpoints:
 | `GET /api/replay?scenario=NAME[&seed=N]` | The run's `replay.html` |
 
 3D site (`../web/`, singularos.willsarg.com): plays exported runs with the
-station, vehicle, thrusters and Earth to scale. Regenerate the data after
-changing the simulator or scenarios (the data is not committed;
-`pnpm run deploy` regenerates it before building):
+station, vehicle, thrusters and Earth to scale. The data is not committed.
+After setting up the Python environment above, the site's development, test,
+and build commands regenerate it automatically:
 
 ```sh
-.venv/bin/python -m telemetry.export_web   # writes ../web/public/runs/*.json
-cd ../web && pnpm install && pnpm dev      # or: pnpm run export-runs
+cd ../web && pnpm install && pnpm dev
+# Regenerate after simulator changes while the development server is running:
+pnpm run export-runs
 ```
 
-Each run is sampled every 0.4 s of sim time. Truth (position, heading,
+Each run is sampled every 0.4 s of sim time, plus its terminal physics record
+when the run ends between samples. Truth (position, heading,
 delivered thrust, thruster health) and the controller's view (navigation
 fix, thruster health estimate, decisions) are kept separate; events are
 tagged `truth` or `controller`. The export is deterministic for a given

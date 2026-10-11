@@ -3,12 +3,12 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "vite --host 127.0.0.1",
-    "build": "vite build",
+    "dev": "pnpm run export-runs && vite --host 127.0.0.1",
+    "build": "pnpm run export-runs && vite build",
     "preview": "vite preview --host 127.0.0.1",
-    "test": "node --test",
+    "test": "pnpm run export-runs && node --test",
     "export-runs": "cd ../SingularityReturnHome && .venv/bin/python -m telemetry.export_web",
-    "deploy": "pnpm run export-runs && pnpm build && wrangler deploy"
+    "deploy": "pnpm build && wrangler deploy"
   },
   "devDependencies": {
     "vite": "^8.3.4",

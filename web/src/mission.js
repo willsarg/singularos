@@ -70,7 +70,18 @@ export function createRun(data) {
   const count = s.t.length;
   const duration = s.t[count - 1];
   const dt = data.sample_period_s;
-  const index = (time) => clamp(Math.round(clamp(time, 0, duration) / dt), 0, count - 1);
+  // The terminal sample may fall between regular samples. Find the latest
+  // actual timestamp so discrete state never appears before it happened.
+  const index = (time) => {
+    const t = clamp(time, 0, duration);
+    let low = 0, high = count;
+    while (low < high) {
+      const mid = Math.floor((low + high) / 2);
+      if (s.t[mid] <= t) low = mid + 1;
+      else high = mid;
+    }
+    return Math.max(0, low - 1);
+  };
   const lerp = (field, i, j, k) => (s[field][j] === null || s[field][i] === null ? s[field][i] : s[field][i] + (s[field][j] - s[field][i]) * k);
 
   // Phase spans: start time of each phase in order of first appearance.
@@ -95,10 +106,10 @@ export function createRun(data) {
     description: data.description,
     sample(time) {
       const t = clamp(time, 0, duration);
-      const i = Math.min(Math.floor(t / dt), count - 1);
+      const i = index(t);
       const j = Math.min(i + 1, count - 1);
       const k = j === i ? 0 : clamp((t - s.t[i]) / (s.t[j] - s.t[i]));
-      const n = index(t);
+      const n = i;
       let heading = s.heading[i];
       let dh = s.heading[j] - heading;
       if (dh > Math.PI) dh -= 2 * Math.PI;
@@ -119,7 +130,7 @@ export function createRun(data) {
       };
     },
     // Index of the last sample at or before time, for drawing the flown track.
-    sampleIndex: (time) => Math.min(Math.floor(clamp(time, 0, duration) / dt), count - 1),
+    sampleIndex: index,
     eventsUntil: (time) => events.filter((e) => e.t <= time),
     phaseIndex(time) {
       return phaseStarts.findLastIndex((p) => time >= p.t);

@@ -16,6 +16,7 @@ let contextLost = false;
 let request = null;
 let lastLog = '';
 let phaseButtons = [];
+let scenarioRequest = 0;
 
 const CAPTIONS = {
   DEPART: 'Leaving the dock for the inspection loop.',
@@ -123,9 +124,18 @@ function setPlaying(playing) {
 }
 
 async function loadScenario(name, frozen = null) {
-  const response = await fetch(`${runsUrl}${name}.json`);
-  if (!response.ok) throw new Error(`Run ${name}: HTTP ${response.status}`);
-  run = createRun(await response.json());
+  const requestId = ++scenarioRequest;
+  let data;
+  try {
+    const response = await fetch(`${runsUrl}${name}.json`);
+    if (!response.ok) throw new Error(`Run ${name}: HTTP ${response.status}`);
+    data = await response.json();
+  } catch (error) {
+    if (requestId !== scenarioRequest) return;
+    throw error;
+  }
+  if (requestId !== scenarioRequest) return;
+  run = createRun(data);
   const speed = autoSpeed(run.duration);
   const time = frozen === null ? 0 : parseFrozenTime(frozen, run.duration) ?? 0;
   const wasPlaying = playback ? playback.playing : frozen === null && !reduceMotion.matches;

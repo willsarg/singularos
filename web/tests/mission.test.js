@@ -71,6 +71,32 @@ test('the abort run descends to reentry', () => {
   assert.ok(run.events.some((e) => e.type === 'reentry' && e.source === 'truth'));
 });
 
+test('every run reaches its exported final phase and complete flown track', () => {
+  for (const { name } of index) {
+    const data = load(name);
+    const run = createRun(data);
+    const end = run.sample(run.duration);
+    assert.equal(end.phase, data.summary.final_phase, name);
+    assert.equal(run.sampleIndex(run.duration), data.samples.t.length - 1, name);
+  }
+});
+
+test('discrete state changes at its sample timestamp, never before it', () => {
+  const data = load('thruster_fault');
+  const s = data.samples;
+  const transition = s.phase.findIndex((phase, i) => i > 0 && phase !== s.phase[i - 1]);
+  const run = createRun(data);
+  const at = s.t[transition];
+  assert.equal(run.sample(at - 0.01).phase, data.phases[s.phase[transition - 1]]);
+  assert.equal(run.sample(at).phase, data.phases[s.phase[transition]]);
+  assert.equal(run.sampleIndex(at), transition);
+});
+
+test('reentry is reachable at the end of abort playback', () => {
+  const run = createRun(load('orbital_strike_abort'));
+  assert.ok(run.eventsUntil(run.duration).some((event) => event.type === 'reentry'));
+});
+
 test('auto speed plays each run in about a minute', () => {
   for (const { name, sim_time_s: duration } of index) {
     const loop = duration / autoSpeed(duration);

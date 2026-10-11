@@ -23,3 +23,7 @@ def test_export_matches_summary(tmp_path):
     abort = json.loads((tmp_path / "orbital_strike_abort.json").read_text())
     # The reentry happens after the last controller tick; it must still be exported.
     assert any(e["type"] == "reentry" and e["source"] == "truth" for e in abort["events"])
+    assert abort["samples"]["t"][-1] == abort["summary"]["sim_time_s"]
+    assert max(e["t"] for e in abort["events"]) <= abort["samples"]["t"][-1]
+    assert abs(abort["samples"]["x"][-1] - abort["summary"]["final_position_m"][0]) < 0.01
+    assert abs(abort["samples"]["y"][-1] - abort["summary"]["final_position_m"][1]) < 0.01

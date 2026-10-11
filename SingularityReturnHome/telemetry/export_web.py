@@ -59,14 +59,35 @@ def export_run(name, out_dir, seed=None):
     frames = build_frames(run / "log.jsonl")
     # Events straight from the log: build_frames attaches events to the next
     # controller frame, which drops any after the last one (e.g. reentry).
+    latest_nav = None
     with open(run / "log.jsonl") as log:
         for line in log:
             rec = json.loads(line)
+            for observation in rec["observations"]:
+                if observation["source"] == "navigation" and observation["available"]:
+                    latest_nav = observation
             sources = [("truth", rec["truth"].get("events", []))]
             if rec.get("controller"):
                 sources.append(("controller", rec["controller"].get("events", [])))
             for source, batch in sources:
                 events += [{**e, "t": round(e.get("t", rec["t"]), 2), "source": source} for e in batch]
+    # Physics may terminate between controller ticks. Preserve the terminal
+    # truth and latest navigation observation, carrying forward only the
+    # controller's phase, leg and health estimates from its last tick.
+    if rec["t"] > frames[-1]["t"] + 1e-9:
+        truth = rec["truth"]
+        terminal = {
+            **frames[-1],
+            "t": round(rec["t"], 3),
+            "truth": [truth[k] for k in ("x_m", "y_m", "vx_m_s", "vy_m_s", "heading_rad", "angular_rate_rad_s", "fuel_kg")],
+            "clear": truth["station_clearance_m"],
+            "thrust": [truth["thrust_n"][k] for k in THRUSTER_NAMES],
+            "health": [truth["thruster_health"][k] for k in THRUSTER_NAMES],
+            "nav": None if latest_nav is None else
+                [latest_nav["value"][k] for k in ("x_m", "y_m", "vx_m_s", "vy_m_s")]
+                + [rec["t"] - latest_nav["timestamp"]],
+        }
+        frames.append(terminal)
     next_t = 0.0
     for i, f in enumerate(frames):
         if f["t"] + 1e-9 < next_t and i != len(frames) - 1:
