@@ -1,0 +1,74 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "singularos://schemas/recovery-proposal.json",
+  "title": "LLM Recovery Proposal",
+  "description": "A single constrained proposal from the LLM recovery agent. The LLM proposes and interprets only; it never drives actuators and never asserts numeric feasibility (MISSION.md §7). Every field is enforced at the token level via llama.cpp grammar-constrained decoding.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "mode", "rationale", "requested_checks", "plan"],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "mode": {
+      "description": "Requested recovery mode. Constrained to the fixed state-machine vocabulary (MISSION.md §8). The arbiter validates the transition; the LLM may only request.",
+      "enum": ["NORMAL", "INVESTIGATE", "RETURN", "APPROACH", "DOCKED", "HOLD", "ABORT"]
+    },
+    "rationale": {
+      "description": "Short human-readable justification citing evidence. Bounded so a runaway generation cannot fill the log.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 600
+    },
+    "requested_checks": {
+      "description": "Diagnostic/verification steps the LLM asks the numerical planner & validator to run before its plan is accepted. The LLM cannot mark these as passed. Unique members only.",
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 6,
+      "uniqueItems": true,
+      "items": {
+        "enum": [
+          "FUEL_BUDGET",
+          "TRAJECTORY_FEASIBILITY",
+          "COLLISION_CHECK",
+          "DOCK_ALIGNMENT",
+          "OBSERVATION_FRESHNESS",
+          "ACTUATOR_EFFECTIVENESS"
+        ]
+      }
+    },
+    "plan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["action", "parameters"],
+      "properties": {
+        "action": {
+          "enum": [
+            "MAINTAIN",
+            "REORIENT",
+            "BURN",
+            "COAST",
+            "HOLD_POSITION",
+            "BEGIN_APPROACH",
+            "FINAL_APPROACH",
+            "DOCK_SEQUENCE",
+            "SAFE_RETREAT",
+            "POWER_DOWN"
+          ]
+        },
+        "parameters": {
+          "description": "Action parameters. All numeric fields are bounded; the validator re-checks them against real dynamics. The LLM may propose, never assert.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "target_id": { "type": "string", "maxLength": 64 },
+            "max_delta_v_mps": { "type": "number", "minimum": 0, "maximum": 5 },
+            "max_relative_speed_mps": { "type": "number", "minimum": 0, "maximum": 2 },
+            "timeout_s": { "type": "number", "minimum": 1, "maximum": 3600 },
+            "priority": { "type": "integer", "minimum": 0, "maximum": 3 }
+          }
+        }
+      }
+    }
+  }
+}
