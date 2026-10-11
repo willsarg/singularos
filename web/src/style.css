@@ -46,6 +46,19 @@ h1 em { font-style: normal; color: var(--cyan); }
 .metric-label { display: block; color: var(--muted); font-size: 8px; letter-spacing: 0.08em; margin-bottom: 9px; }
 .telemetry strong { font-size: 20px; font-weight: 400; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .telemetry strong.locked { color: var(--cyan); }
+.advice-card { margin: 0 12px 15px; padding: 13px 12px; border: 1px solid rgba(235,183,121,0.35); background: rgba(235,183,121,0.04); }
+.advice-heading { display: flex; justify-content: space-between; gap: 8px; color: #ebbb87; font-size: 8px; letter-spacing: 0.09em; }
+.advice-model { color: var(--muted); font-size: 10px; overflow-wrap: anywhere; margin: 8px 0 12px; }
+.advice-time { color: #a8a795; font-size: 8px; margin: 0 0 7px; }
+.advice-proposal { color: #f2d3b1; font-size: 13px; margin: 0 0 6px; }
+.advice-comparison { color: var(--muted); font-size: 10px; line-height: 1.5; margin: 0; }
+.advice-card details { margin-top: 12px; font-size: 11px; line-height: 1.55; }
+.advice-card summary { color: #ebbb87; cursor: pointer; }
+.advice-card summary:focus-visible { outline: 2px solid var(--cyan); outline-offset: 4px; }
+#advice-checks { list-style: none; margin: 10px 0; padding: 0; }
+#advice-checks li { margin: 8px 0; padding-left: 8px; border-left: 1px solid var(--line); color: var(--muted); font-size: 10px; }
+#advice-checks li[data-result="FAIL"] { border-color: #db927c; }
+.advice-note { color: var(--muted); font-size: 9px; }
 .system-row { display: flex; justify-content: space-between; padding: 6px 17px; color: var(--muted); font-size: 8px; letter-spacing: 0.08em; }
 .system-row span:last-child { color: var(--cyan); }
 .system-row .offline { color: #c99b79 !important; }

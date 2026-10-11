@@ -1,6 +1,9 @@
 import json
 
+import pytest
+
 from telemetry.export_web import FIELDS, main
+from tests.test_llm import FakeOllama, MODEL, proposal
 
 
 def test_export_matches_summary(tmp_path):
@@ -27,3 +30,35 @@ def test_export_matches_summary(tmp_path):
     assert max(e["t"] for e in abort["events"]) <= abort["samples"]["t"][-1]
     assert abs(abort["samples"]["x"][-1] - abort["summary"]["final_position_m"][0]) < 0.01
     assert abs(abort["samples"]["y"][-1] - abort["summary"]["final_position_m"][1]) < 0.01
+
+
+def test_llm_export_records_advice_without_changing_flight(tmp_path, monkeypatch):
+    from telemetry import export_web
+    monkeypatch.setattr(export_web, "DEFAULT_RUNS_DIR", tmp_path / "logs")
+    server = FakeOllama([json.dumps(proposal())])
+    monkeypatch.setenv("SINGULAROS_LLM_BACKEND", "ollama")
+    monkeypatch.setenv("SINGULAROS_LLM_URL", server.url)
+    monkeypatch.setenv("SINGULAROS_LLM_MODEL", MODEL)
+    try:
+        main(["--out", str(tmp_path / "offline"), "thruster_fault"])
+        main(["--llm", "--out", str(tmp_path / "llm"), "thruster_fault"])
+        offline = json.loads((tmp_path / "offline/thruster_fault.json").read_text())
+        llm = json.loads((tmp_path / "llm/thruster_fault.json").read_text())
+        assert llm["advisor"] == {"enabled": True, "backend": "ollama", "model": MODEL, "recorded": True}
+        assert llm["samples"] == offline["samples"]
+        advice = [e for e in llm["events"] if e["type"] == "llm_advice"]
+        assert advice and advice[0]["proposal"]["rationale"] == proposal()["rationale"]
+        assert "review" in advice[0]
+        assert any(path == "/api/chat" for path, _ in server.requests)
+    finally:
+        server.close()
+
+
+def test_requested_llm_export_reports_unavailable_server(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("SINGULAROS_LLM_BACKEND", "ollama")
+    monkeypatch.setenv("SINGULAROS_LLM_URL", "http://127.0.0.1:9")
+    with pytest.raises(SystemExit) as error:
+        main(["--llm", "--out", str(tmp_path), "thruster_fault"])
+    assert error.value.code == 2
+    assert "advisor unavailable" in capsys.readouterr().err.lower()
+    assert not (tmp_path / "index.json").exists()

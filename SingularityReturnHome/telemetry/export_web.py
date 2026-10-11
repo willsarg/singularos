@@ -1,16 +1,17 @@
 """Export scenario runs as playback data for the 3D site in web/.
 
-For each scenario this runs the simulator into runs/web-<scenario>/ (always a
-fresh run, so the export matches the current code), samples the log every SAMPLE_PERIOD_S of sim time and writes
+For each scenario this runs the simulator into runs/web-<scenario>/ (or
+runs/web-llm-<scenario>/ with --llm), samples the fresh log every SAMPLE_PERIOD_S of sim time and writes
 <out>/<scenario>.json plus <out>/index.json listing the runs.
 
 Samples are columnar (one array per field) to keep the files small. Truth and
 observations stay separate: x/y/heading/thrust/health are truth; nav_* is the
 latest available navigation observation and est is the controller's thruster
 health estimate. Events carry source "truth" (what happened) or "controller"
-(what the controller decided), as in the replay.
+(what the controller decided), as in the replay. Model advice is recorded
+without changing the flight; replies may vary between exports.
 
-Usage: python -m telemetry.export_web [--out ../web/public/runs] [scenario ...]
+Usage: python -m telemetry.export_web [--llm] [--out ../web/public/runs] [scenario ...]
 """
 
 import argparse
@@ -44,10 +45,11 @@ def scenario_description(name):
     return " ".join(lines)
 
 
-def export_run(name, out_dir, seed=None):
+def export_run(name, out_dir, seed=None, advisor=None, advisor_metadata=None):
     config = with_seed(load_config(SCENARIOS_DIR / f"{name}.toml"), seed)
-    run = DEFAULT_RUNS_DIR / f"web-{name}"
-    run_scenario(config, run)
+    prefix = "web-llm" if advisor is not None else "web"
+    run = DEFAULT_RUNS_DIR / f"{prefix}-{name}"
+    run_scenario(config, run, advisor=advisor)
     config = json.loads((run / "config.json").read_text())
     summary = json.loads((run / "summary.json").read_text())
     summary.pop("out_dir", None)
@@ -119,6 +121,7 @@ def export_run(name, out_dir, seed=None):
         "description": scenario_description(name),
         "faults": describe_faults(config["faults"]),
         "summary": summary,
+        "advisor": advisor_metadata or {"enabled": False, "recorded": False},
         "sample_period_s": SAMPLE_PERIOD_S,
         "thrusters": list(THRUSTER_NAMES),
         "station": config["station"]["components"],
@@ -143,16 +146,37 @@ def export_run(name, out_dir, seed=None):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--out", type=Path, default=DEFAULT_OUT)
+    parser.add_argument("--llm", action="store_true", help="record model advice at recovery decisions")
     parser.add_argument("scenarios", nargs="*", help="default: every scenario")
     args = parser.parse_args(argv)
     names = args.scenarios or scenario_names()
     unknown = sorted(set(names) - set(scenario_names()))
     if unknown:
         parser.error(f"unknown scenario(s): {', '.join(unknown)}")
-    index = [export_run(name, args.out) for name in names]
+    advisor, metadata = None, None
+    if args.llm:
+        from intelligence.advisor import RecoveryAdvisor
+        from intelligence.harness import RecoveryHarness
+        from intelligence.llm import LLMClient
+
+        try:
+            client = LLMClient()
+        except ValueError as exc:
+            parser.error(f"LLM advisor unavailable: {exc}")
+        status = client.health()
+        if not status["ok"]:
+            parser.error(f"LLM advisor unavailable: {status['detail']}")
+        advisor = RecoveryAdvisor(RecoveryHarness(client))
+        metadata = {"enabled": True, "backend": client.config.backend,
+                    "model": client.config.model, "recorded": True}
+        print(f"Recording {client.config.backend} advice from {client.config.model}", flush=True)
+    index = []
+    for name in names:
+        print(f"Exporting {name}...", flush=True)
+        entry = export_run(name, args.out, advisor=advisor, advisor_metadata=metadata)
+        index.append(entry)
+        print(f"{entry['name']}: {entry['outcome']} (expected {entry['expected_outcome']})", flush=True)
     (args.out / "index.json").write_text(json.dumps(index, indent=1))
-    for entry in index:
-        print(f"{entry['name']}: {entry['outcome']} (expected {entry['expected_outcome']})")
 
 
 if __name__ == "__main__":

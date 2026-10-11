@@ -97,6 +97,17 @@ test('reentry is reachable at the end of abort playback', () => {
   assert.ok(run.eventsUntil(run.duration).some((event) => event.type === 'reentry'));
 });
 
+test('recorded model advice is revealed only after its decision time', () => {
+  const data = load('thruster_fault');
+  data.events.push({ t: 190, type: 'llm_advice', source: 'controller', point: 'recovery_plan',
+    proposal: { mode: 'RETURN', plan: { action: 'RETURN_LOOP' }, rationale: 'Three thrusters remain available.' },
+    review: { deterministic_mode: 'RETURN', agrees_with_deterministic: true, checks: {}, failed: [] } });
+  const run = createRun(data);
+  assert.equal(run.adviceAt(189), null);
+  assert.equal(run.adviceAt(190).proposal.mode, 'RETURN');
+  assert.equal(run.adviceAt(191).proposal.rationale, 'Three thrusters remain available.');
+});
+
 test('auto speed plays each run in about a minute', () => {
   for (const { name, sim_time_s: duration } of index) {
     const loop = duration / autoSpeed(duration);

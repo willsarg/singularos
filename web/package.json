@@ -5,9 +5,11 @@
   "scripts": {
     "dev": "pnpm run export-runs && vite --host 127.0.0.1",
     "build": "pnpm run export-runs && vite build",
+    "build:demo": "pnpm run export-runs:llm && vite build --mode demo",
     "preview": "vite preview --host 127.0.0.1",
     "test": "pnpm run export-runs && node --test",
     "export-runs": "cd ../SingularityReturnHome && .venv/bin/python -m telemetry.export_web",
+    "export-runs:llm": "cd ../SingularityReturnHome && .venv/bin/python -m telemetry.export_web --llm --out ../web/public/runs-llm",
     "deploy": "pnpm build && wrangler deploy"
   },
   "devDependencies": {

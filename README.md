@@ -39,6 +39,24 @@ drift and impact particles.
 `web/public/runs/` before running. `pnpm run export-runs` regenerates them
 explicitly after simulator changes while a development server is already open.
 
+For a demo with recorded Ollama advice, start Ollama with the model configured
+in the [simulator's LLM settings](SingularityReturnHome/README.md#llm-advisor),
+then run from `web/`:
+
+```sh
+pnpm run build:demo
+pnpm preview
+```
+
+The demo build generates separate runs in `web/public/runs-llm/` and displays
+the model's proposal, rationale, and numerical check results at each decision
+point. Ollama runs during export; browser playback uses the recorded replies.
+The deterministic controller retains actuator authority. Missing server or
+model stops the export; individual advice failures appear in the replay while
+the controller continues. Normal development, tests, and builds remain offline
+and do not overwrite the demo recordings. To rebuild the UI using existing
+recordings, run `pnpm exec vite build --mode demo`.
+
 ## Simulator
 
 `SingularityReturnHome/` contains the headless Python simulator used by the

@@ -139,6 +139,7 @@ export function createRun(data) {
     // Index of the last sample at or before time, for drawing the flown track.
     sampleIndex: index,
     eventsUntil: (time) => events.filter((e) => e.t <= time),
+    adviceAt: (time) => events.findLast((e) => e.type === 'llm_advice' && e.t <= time) ?? null,
     phaseIndex(time) {
       return phaseStarts.findLastIndex((p) => time >= p.t);
     },

@@ -7,7 +7,7 @@ import {
 const $ = (id) => document.getElementById(id);
 const params = new URLSearchParams(location.search);
 const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
-const runsUrl = `${import.meta.env.BASE_URL}runs/`;
+const runsUrl = `${import.meta.env.BASE_URL}${import.meta.env.MODE === 'demo' ? 'runs-llm/' : 'runs/'}`;
 let scene;
 let run = null;
 let playback = null;
@@ -18,6 +18,45 @@ let lastLog = '';
 let phaseButtons = [];
 let scenarioRequest = 0;
 let viewMode = params.get('view') === 'overview' ? 'overview' : 'cinematic';
+let adviceRun = null;
+let lastAdvice;
+
+function updateAdvice(time) {
+  const metadata = run.data.advisor;
+  $('advice-card').hidden = !metadata?.enabled;
+  if (!metadata?.enabled) return;
+  const advice = run.adviceAt(time);
+  if (adviceRun === run && lastAdvice === advice) return;
+  adviceRun = run;
+  lastAdvice = advice;
+  $('advice-backend').textContent = metadata.backend === 'ollama' ? 'OLLAMA' : 'MODEL';
+  $('advice-model').textContent = metadata.model?.split('/').at(-1) || 'Configured model';
+  $('advice-model').title = metadata.model || '';
+  $('advice-details').hidden = !advice || !!advice.error;
+  $('advice-checks').replaceChildren();
+  $('advice-time').textContent = advice ? `${formatMET(advice.t)} · ${advice.point.replaceAll('_', ' ')}` : 'ADVISORY ONLY';
+  if (!advice) {
+    $('advice-proposal').textContent = run.events.some((e) => e.type === 'llm_advice')
+      ? 'Awaiting recovery decision' : 'No advice requested for this run';
+    $('advice-comparison').textContent = 'The flight controller executes the mission.';
+    return;
+  }
+  if (advice.error) {
+    $('advice-proposal').textContent = 'Advice unavailable';
+    $('advice-comparison').textContent = 'The flight controller continued independently.';
+    return;
+  }
+  $('advice-proposal').textContent = `${advice.proposal.mode} / ${advice.proposal.plan.action.replaceAll('_', ' ')}`;
+  $('advice-comparison').textContent = `Mode ${advice.review.agrees_with_deterministic ? 'matches' : 'differs from'} controller: ${advice.review.deterministic_mode}`;
+  $('advice-rationale').textContent = advice.proposal.rationale;
+  $('advice-checks').replaceChildren(...Object.entries(advice.review.checks).map(([name, check]) => {
+    const li = document.createElement('li');
+    const result = check.pass === true ? 'PASS' : check.pass === false ? 'FAIL' : 'NOT EVALUATED';
+    li.dataset.result = result;
+    li.textContent = `${name.replaceAll('_', ' ')}: ${result}. ${check.detail}`;
+    return li;
+  }));
+}
 
 const CAPTIONS = {
   DEPART: 'Leaving the dock for the inspection loop.',
@@ -34,6 +73,7 @@ function updateUI(time) {
   if (!run) return;
   const state = run.sample(time);
   const summary = run.data.summary;
+  updateAdvice(time);
   $('met').textContent = formatMET(time);
   $('range').textContent = formatDistance(state.range);
   $('fuel').textContent = `${state.fuel.toFixed(2)} kg`;
@@ -66,7 +106,7 @@ function updateUI(time) {
       timestamp.textContent = formatMET(e.t);
       const source = document.createElement('span');
       source.className = `source ${e.source}`;
-      source.textContent = e.source === 'truth' ? 'TRUTH' : 'CONTROLLER';
+      source.textContent = e.type === 'llm_advice' ? 'MODEL' : e.source === 'truth' ? 'TRUTH' : 'CONTROLLER';
       timestamp.append(source);
       li.append(timestamp, document.createTextNode(e.text));
       return li;

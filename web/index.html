@@ -45,6 +45,19 @@
         <div><span class="metric-label">FUEL</span><strong id="fuel">0 kg</strong></div>
         <div><span class="metric-label">PERIGEE</span><strong id="perigee">0 km</strong></div>
       </div>
+      <section class="advice-card" id="advice-card" aria-label="Recorded model advice" hidden>
+        <div class="advice-heading"><span id="advice-backend">OLLAMA</span><span>RECORDED ADVICE</span></div>
+        <p class="advice-model" id="advice-model"></p>
+        <p class="advice-time" id="advice-time"></p>
+        <p class="advice-proposal" id="advice-proposal"></p>
+        <p class="advice-comparison" id="advice-comparison"></p>
+        <details id="advice-details">
+          <summary>Rationale and checks</summary>
+          <p id="advice-rationale"></p>
+          <ul id="advice-checks"></ul>
+          <p class="advice-note">Advisory only. The flight controller retains command authority.</p>
+        </details>
+      </section>
       <div class="system-row"><span>PHASE</span><span id="phase">-</span></div>
       <div class="system-row"><span>TARGET</span><span id="leg">-</span></div>
       <div class="system-row"><span>STATION CLEARANCE</span><span id="clearance">-</span></div>

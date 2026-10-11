@@ -97,6 +97,13 @@ ollama serve                                        # if not already running
 .venv/bin/python -m singularos_sim scenarios/orbital_strike_safe_orbit.toml --llm
 ```
 
+To include advice in the Three.js demo, run `pnpm run build:demo` from `../web/`,
+then `pnpm preview`. This uses `telemetry.export_web --llm`, which requires a
+healthy configured server and model before exporting. It stores separate,
+ignored demo recordings and includes advisor metadata, proposals, and check
+reviews. Playback shows advice only after its decision timestamp; it does not
+make live model requests or change the recorded flight.
+
 Settings (environment):
 
 | Variable | Default | |
