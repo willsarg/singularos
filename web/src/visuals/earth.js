@@ -19,7 +19,8 @@ function placeholder(r, g, b) {
   return texture;
 }
 
-export function createEarth(radius, sunDirection, renderer, invalidate, onTextureError) {
+// cloudHeight and airHeight are shell heights as fractions of the radius.
+export function createEarth(radius, sunDirection, renderer, invalidate, onTextureError, { cloudHeight = 0.009, airHeight = 0.035 } = {}) {
   const earth = new THREE.Group();
   const uniforms = {
     dayMap: { value: placeholder(12, 40, 68) },
@@ -60,7 +61,7 @@ export function createEarth(radius, sunDirection, renderer, invalidate, onTextur
     `,
   }));
   earth.add(globe);
-  const clouds = new THREE.Mesh(new THREE.SphereGeometry(radius * 1.009, 96, 48), new THREE.ShaderMaterial({
+  const clouds = new THREE.Mesh(new THREE.SphereGeometry(radius * (1 + cloudHeight), 96, 48), new THREE.ShaderMaterial({
     uniforms, vertexShader, transparent: true, depthWrite: false,
     fragmentShader: `
       uniform sampler2D cloudMap;
@@ -79,7 +80,7 @@ export function createEarth(radius, sunDirection, renderer, invalidate, onTextur
     `,
   }));
   earth.add(clouds);
-  const air = new THREE.Mesh(new THREE.SphereGeometry(radius * 1.035, 96, 48), new THREE.ShaderMaterial({
+  const air = new THREE.Mesh(new THREE.SphereGeometry(radius * (1 + airHeight), 96, 48), new THREE.ShaderMaterial({
     uniforms, vertexShader, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
     fragmentShader: `
       uniform vec3 sunDirection;

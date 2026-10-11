@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#050d17">
   <link rel="icon" type="image/svg+xml" href="/favicon.svg">
   <title>SingularOS — Find a way home</title>
-  <meta name="description" content="A stylized 3D mission: an autonomous spacecraft discovers its hardware, navigates by the stars, and finds a way back to Earth.">
+  <meta name="description" content="3D replays of the SingularOS simulator: an autonomous inspection craft detects faults, diagnoses its thrusters, and recovers to its station or a safe orbit.">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&family=Big+Shoulders+Display:wght@500;700;900&display=swap" rel="stylesheet">
@@ -15,60 +15,67 @@
   <div class="viewport" id="viewport">
     <canvas id="scene" aria-hidden="true"></canvas>
     <div class="vignette" aria-hidden="true"></div>
-    <div class="scene-label earth-label" aria-hidden="true"><span class="marker"></span> EARTH <small>RETURN TARGET</small></div>
+    <div class="scene-label earth-label" aria-hidden="true"><span class="marker"></span> EARTH <small>TRUE SCALE</small></div>
+    <div class="scene-label station-label" aria-hidden="true"><span class="marker"></span> STATION <small>DOCK AT ORIGIN</small></div>
     <div class="scene-label craft-label" aria-hidden="true"><span class="marker"></span> SINGULAR / 01 <small>AUTONOMOUS VEHICLE</small></div>
   </div>
 
   <header class="masthead">
     <a class="wordmark" href="./" aria-label="SingularOS home"><span class="brand-icon" aria-hidden="true">✳</span> SINGULAR<span>OS</span></a>
-    <div class="mission-tag"><span class="status-dot"></span> MISSION 001 <span class="separator">/</span> RETURN TO EARTH</div>
-    <span class="simulation-tag">3D SIMULATION</span>
+    <div class="mission-tag"><span class="status-dot"></span> <span id="scenario-name">LOADING</span> <span class="separator">/</span> <span id="scenario-faults"></span></div>
+    <span class="simulation-tag">SIMULATOR REPLAY</span>
   </header>
 
   <main>
     <section class="intro" aria-labelledby="heading">
-      <p class="eyebrow"><span></span> AUTONOMY BEYOND THE SIGNAL</p>
+      <p class="eyebrow"><span></span> AUTONOMOUS FAULT RECOVERY</p>
       <h1 id="heading">Find a<br>way <em>home.</em></h1>
-      <p class="description">Unknown hardware. No ground link.<br>One autonomous system, navigating by the stars.</p>
+      <p class="description" id="description">An inspection craft works around its station. When something breaks, it has to work out what and get back on its own.</p>
     </section>
 
     <aside class="telemetry" aria-label="Mission telemetry">
       <div class="panel-heading"><span>ONBOARD TELEMETRY</span><span class="tiny-cross" aria-hidden="true">+</span></div>
       <div class="telemetry-grid">
         <div><span class="metric-label">MISSION ELAPSED</span><strong id="met">T+00:00</strong></div>
-        <div><span class="metric-label">POSITION ERROR</span><strong id="err">NO FIX</strong></div>
+        <div><span class="metric-label">RANGE TO DOCK</span><strong id="range">0 m</strong></div>
+        <div><span class="metric-label">FUEL</span><strong id="fuel">0 kg</strong></div>
+        <div><span class="metric-label">PERIGEE</span><strong id="perigee">0 km</strong></div>
       </div>
-      <div class="system-row"><span>GROUND LINK</span><span class="offline">OFFLINE</span></div>
-      <div class="system-row"><span>NAVIGATION</span><span id="nav-status">INITIALIZING</span></div>
+      <div class="system-row"><span>PHASE</span><span id="phase">-</span></div>
+      <div class="system-row"><span>TARGET</span><span id="leg">-</span></div>
+      <div class="system-row"><span>STATION CLEARANCE</span><span id="clearance">-</span></div>
+      <div class="system-row"><span>ALTITUDE</span><span id="altitude">-</span></div>
+      <div class="log-heading"><span class="status-dot"></span> THRUSTERS <span class="thruster-key">TRUE / ESTIMATED</span></div>
+      <dl class="thrusters" id="thrusters"></dl>
       <div class="log-heading"><span class="status-dot"></span> FLIGHT LOG</div>
       <ol id="log" aria-live="off"></ol>
-      <div class="panel-footer"><span id="phase-code">SEQ 01 / 06</span><span>LOCAL CONTROL</span></div>
+      <div class="panel-footer"><span id="outcome">IN FLIGHT</span><span id="expected"></span></div>
     </aside>
 
-    <div class="scene-caption"><span class="caption-line"></span><span id="scene-caption">Discover the hardware. Establish control.</span></div>
+    <div class="scene-caption"><span class="caption-line"></span><span id="scene-caption"></span></div>
     <p id="render-status" class="render-status" role="status" hidden></p>
-    <noscript><p class="render-status">Enable JavaScript to explore the animated mission.</p></noscript>
+    <noscript><p class="render-status">Enable JavaScript to play the simulator runs.</p></noscript>
   </main>
 
   <footer class="mission-console">
-    <div class="console-heading"><span>MISSION SEQUENCE</span><span id="playback-status">AUTOPLAY / 46 SECOND LOOP</span></div>
+    <div class="console-heading">
+      <span>MISSION SEQUENCE</span>
+      <span class="run-controls">
+        <label for="scenario">SCENARIO</label> <select id="scenario"></select>
+        <label for="speed">SPEED</label> <select id="speed"></select>
+      </span>
+      <span id="playback-status">AUTOPLAY</span>
+    </div>
     <nav aria-label="Mission phases">
-      <ol class="phases" id="phases">
-        <li><button type="button" data-time="0"><span>01</span>Boot</button></li>
-        <li><button type="button" data-time="5"><span>02</span>Coast</button></li>
-        <li><button type="button" data-time="14"><span>03</span>Fix position</button></li>
-        <li><button type="button" data-time="22"><span>04</span>Plan</button></li>
-        <li><button type="button" data-time="26"><span>05</span>Burn</button></li>
-        <li><button type="button" data-time="37"><span>06</span>Reentry</button></li>
-      </ol>
+      <ol class="phases" id="phases"></ol>
     </nav>
     <div class="transport">
       <button class="transport-button" id="play" type="button" aria-label="Pause mission"><span id="play-icon" aria-hidden="true">Ⅱ</span><span id="play-text">Pause</span></button>
       <button class="replay-button" id="replay" type="button" aria-label="Replay mission">↺ <span>Replay</span></button>
-      <label class="sr-only" for="timeline">Mission timeline in seconds</label>
-      <input id="timeline" type="range" min="0" max="46" step="0.1" value="0" aria-valuetext="Boot, 0 seconds">
-      <output id="elapsed" for="timeline" aria-live="off">00 / 46s</output>
-      <span class="scale-note">ILLUSTRATIVE · NOT TO SCALE</span>
+      <label class="sr-only" for="timeline">Mission timeline in simulator seconds</label>
+      <input id="timeline" type="range" min="0" max="1" step="0.1" value="0">
+      <output id="elapsed" for="timeline" aria-live="off">T+00:00</output>
+      <span class="scale-note">SIM DATA / VEHICLE, STATION AND EARTH TO SCALE</span>
     </div>
   </footer>
   <script type="module" src="/src/main.js"></script>

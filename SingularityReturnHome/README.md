@@ -23,6 +23,7 @@ recovery uses the two-body modules in this directory: `simulation/orbit.py`,
 | `safety/validator.py` | Independent re-verification of a proposed burn |
 | `navigation/deadline.py` | Time until the orbit descends through a given altitude |
 | `telemetry/api.py` | HTTP API for the dashboard |
+| `telemetry/export_web.py` | Exports runs as playback data for the 3D site in `../web/` |
 | `dashboard/` | React dashboard |
 | `intelligence/` | LLM client (Ollama or OpenAI-compatible), recovery-proposal harness, check review, advisor |
 | `mission.py`, `control/` | One-shot two-body recovery script |
@@ -62,6 +63,22 @@ API endpoints:
 | `GET /api/scenarios` | Scenario names, expected outcomes, faults |
 | `GET /api/run?scenario=NAME[&seed=N]` | Runs the scenario (or reuses a finished run): summary, track sampled every 1 s, controller events |
 | `GET /api/replay?scenario=NAME[&seed=N]` | The run's `replay.html` |
+
+3D site (`../web/`, singularos.willsarg.com): plays exported runs with the
+station, vehicle, thrusters and Earth to scale. Regenerate the data after
+changing the simulator or scenarios (the data is not committed;
+`pnpm run deploy` regenerates it before building):
+
+```sh
+.venv/bin/python -m telemetry.export_web   # writes ../web/public/runs/*.json
+cd ../web && pnpm install && pnpm dev      # or: pnpm run export-runs
+```
+
+Each run is sampled every 0.4 s of sim time. Truth (position, heading,
+delivered thrust, thruster health) and the controller's view (navigation
+fix, thruster health estimate, decisions) are kept separate; events are
+tagged `truth` or `controller`. The export is deterministic for a given
+scenario and seed.
 
 ## LLM advisor
 

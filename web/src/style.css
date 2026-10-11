@@ -14,7 +14,7 @@
 }
 * { box-sizing: border-box; }
 body { margin: 0; min-width: 320px; min-height: 100svh; }
-button, input { font: inherit; }
+button, input, select { font: inherit; }
 button, a, input { -webkit-tap-highlight-color: transparent; }
 button { color: inherit; }
 button { cursor: pointer; }
@@ -38,7 +38,7 @@ button:focus-visible, a:focus-visible, input:focus-visible { outline: 2px solid 
 .eyebrow > span { width: 25px; height: 1px; background: var(--cyan); }
 h1 { font-family: var(--display); font-size: clamp(66px, 7.7vw, 126px); font-weight: 700; line-height: 0.88; letter-spacing: -0.025em; margin: 0; }
 h1 em { font-style: normal; color: var(--cyan); }
-.description { margin: 22px 0 0; color: var(--muted); font-size: 13px; line-height: 1.7; }
+.description { margin: 22px 0 0; max-width: 34ch; color: var(--muted); font-size: 13px; line-height: 1.7; }
 .telemetry { position: absolute; width: 255px; top: 16vh; right: 3.5vw; background: linear-gradient(135deg, rgba(9,24,35,0.82), rgba(6,16,25,0.6)); border: 1px solid var(--line); backdrop-filter: blur(12px); }
 .panel-heading { padding: 15px 17px; display: flex; align-items: center; justify-content: space-between; color: var(--muted); border-bottom: 1px solid var(--line); font-size: 9px; }
 .tiny-cross { color: var(--cyan); font-size: 17px; line-height: 1; }
@@ -55,7 +55,7 @@ h1 em { font-style: normal; color: var(--cyan); }
 #log li:last-child { color: var(--paper); border-color: var(--cyan); }
 #log time { display: block; font-size: 8px; color: #7e9ca8; margin-bottom: 3px; font-variant-numeric: tabular-nums; }
 .panel-footer { display: flex; justify-content: space-between; border-top: 1px solid var(--line); padding: 11px 17px; color: #7e9ca8; font-size: 7px; }
-.scene-label { position: absolute; top: 0; left: 0; color: #b9d5d8; font-size: 8px; pointer-events: none; white-space: nowrap; }
+.scene-label { position: absolute; top: 0; left: 0; color: #d6eef0; font-size: 8px; pointer-events: none; white-space: nowrap; text-shadow: 0 0 6px #020409, 0 0 2px #020409; }
 .scene-label small { display: block; font-size: 6px; color: #74919d; padding: 6px 0 0 16px; }
 .marker { display: inline-block; width: 6px; height: 6px; border: 1px solid var(--cyan); margin-right: 7px; }
 .scene-caption { position: absolute; bottom: 210px; left: 3.5vw; display: flex; gap: 12px; align-items: center; color: var(--muted); font-size: 11px; }
@@ -63,7 +63,7 @@ h1 em { font-style: normal; color: var(--cyan); }
 .mission-console { position: absolute; left: 3.5vw; right: 3.5vw; bottom: 24px; }
 .console-heading { display: flex; justify-content: space-between; font-size: 8px; color: var(--muted); margin-bottom: 16px; }
 .console-heading span:last-child { color: #698894; }
-.phases { display: grid; grid-template-columns: repeat(6, 1fr); list-style: none; padding: 0; margin: 0; gap: 12px; }
+.phases { display: grid; grid-template-columns: repeat(var(--phase-count, 6), 1fr); list-style: none; padding: 0; margin: 0; gap: 12px; }
 .phases button { width: 100%; text-align: left; display: flex; align-items: baseline; gap: 12px; border: 0; border-top: 1px solid #29404c; background: none; padding: 16px 0; color: #78949f; font-size: 12px; transition: color 180ms, border-color 180ms; }
 .phases button span { font-family: var(--display); font-size: 19px; font-weight: 500; color: #546c77; }
 .phases button:hover { color: var(--paper); border-color: var(--paper); }
@@ -84,6 +84,21 @@ h1 em { font-style: normal; color: var(--cyan); }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 .render-status { position: absolute; left: 3.5vw; bottom: 250px; max-width: 350px; font-size: 13px; line-height: 1.6; color: var(--cyan); background: #0a1a25; padding: 14px; border: 1px solid var(--line); }
 .render-fallback .scene-label { display: none; }
+.thruster-key { margin-left: auto; color: #698894; font-size: 7px; }
+.thrusters { display: grid; grid-template-columns: auto 1fr; gap: 5px 10px; margin: 0 17px; font-size: 10px; font-variant-numeric: tabular-nums; }
+.thrusters dt { color: var(--muted); text-transform: capitalize; }
+.thrusters dd { margin: 0; text-align: right; color: var(--paper); }
+.thrusters dd.firing { color: var(--cyan); }
+.thrusters dd .failed { color: #e08a6b; }
+#log .source { display: inline-block; margin-left: 8px; color: #c99b79; letter-spacing: 0.08em; }
+#log .source.controller { color: #7e9ca8; }
+.panel-footer .pass { color: var(--cyan); }
+.panel-footer .fail { color: #e08a6b; }
+.run-controls { display: flex; align-items: center; gap: 8px; }
+.run-controls label { color: var(--muted); }
+.run-controls select { background: #0a1a25; color: var(--paper); border: 1px solid var(--line); padding: 4px 6px; font-size: 10px; margin-right: 10px; }
+.run-controls select:focus-visible { outline: 2px solid var(--cyan); outline-offset: 2px; }
+
 @media (min-width: 1600px) { .telemetry { width: 285px; } }
 @media (max-width: 1050px) and (min-width: 760px) {
   .telemetry { width: 220px; }
@@ -103,7 +118,10 @@ h1 em { font-style: normal; color: var(--cyan); }
   h1 { font-size: 67px; }
   .description { font-size: 11px; margin-top: 14px; }
   .telemetry { top: auto; bottom: 204px; right: 22px; left: 22px; width: auto; }
-  .panel-heading, .system-row, .log-heading, .panel-footer { display: none; }
+  .panel-heading, .system-row, .log-heading, .panel-footer, .thrusters { display: none; }
+  .run-controls label { display: none; }
+  #playback-status { display: none; }
+  .run-controls select { max-width: 40vw; margin-right: 4px; }
   .telemetry-grid { padding: 13px 15px; grid-template-columns: 1fr 1fr; }
   .telemetry strong { font-size: 18px; }
   .metric-label { font-size: 7px; margin-bottom: 6px; }
@@ -125,6 +143,16 @@ h1 em { font-style: normal; color: var(--cyan); }
   #elapsed { font-size: 8px; }
   #timeline { height: 36px; }
   .render-status { left: 22px; right: 22px; bottom: 350px; font-size: 11px; }
+}
+@media (max-height: 900px) and (min-width: 760px) {
+  .telemetry { top: 104px; }
+  .telemetry-grid { padding: 14px 17px 12px; gap: 10px 14px; }
+  .telemetry strong { font-size: 18px; }
+  .panel-heading { padding: 11px 17px; }
+  .system-row { padding: 4px 17px; }
+  .log-heading { margin: 12px 17px 9px; }
+  #log { min-height: 0; margin-bottom: 10px; }
+  #log li:not(:last-child) { display: none; }
 }
 @media (max-height: 680px) and (min-width: 760px) {
   .masthead { height: 66px; }

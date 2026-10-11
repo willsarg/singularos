@@ -1,71 +1,108 @@
 import './style.css';
 import { createScene } from './scene.js';
-import { TIMING, PHASES, createPlayback, formatMET, missionState, parseFrozenTime } from './mission.js';
+import {
+  DEFAULT_SCENARIO, SPEEDS, autoSpeed, createPlayback, createRun, formatDistance, formatMET, parseFrozenTime, phaseLabel,
+} from './mission.js';
 
 const $ = (id) => document.getElementById(id);
+const params = new URLSearchParams(location.search);
 const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
-const frozen = parseFrozenTime(new URLSearchParams(location.search).get('t'));
-const playback = createPlayback(frozen ?? (reduceMotion.matches ? 25.5 : 0), frozen === null && !reduceMotion.matches);
-const phaseButtons = [...document.querySelectorAll('#phases button')];
-const captions = [
-  'Discover the hardware. Establish control.',
-  'No ground link. An expanding uncertainty.',
-  'Read the stars. Find a position in the dark.',
-  'A new trajectory. A way back to Earth.',
-  'Commit to the burn. Trust the solution.',
-  'Through the atmosphere. Back to where it began.',
-];
+const runsUrl = `${import.meta.env.BASE_URL}runs/`;
 let scene;
+let run = null;
+let playback = null;
 let available = false;
 let contextLost = false;
 let request = null;
 let lastLog = '';
+let phaseButtons = [];
+
+const CAPTIONS = {
+  DEPART: 'Leaving the dock for the inspection loop.',
+  INSPECT: 'Flying the inspection loop around the station.',
+  INVESTIGATE: 'Something is wrong. Braking and testing each thruster.',
+  RETURN: 'Returning to the station with the thrusters that work.',
+  APPROACH: 'Final approach to the docking port.',
+  DOCKED: 'Docked.',
+  HOLD: 'Holding: return is not safe with what is left.',
+  ABORT: 'Abort: no feasible recovery.',
+};
 
 function updateUI(time) {
-  const state = missionState(time);
+  if (!run) return;
+  const state = run.sample(time);
+  const summary = run.data.summary;
   $('met').textContent = formatMET(time);
-  $('err').textContent = state.errorKm === null ? 'NO FIX' : state.errorKm < 10 ? `${state.errorKm.toFixed(1)} km` : `${Math.round(state.errorKm).toLocaleString('en-US')} km`;
-  $('err').classList.toggle('locked', time >= TIMING.plan);
-  $('nav-status').textContent = state.complete ? 'MISSION COMPLETE' : time >= TIMING.plan ? 'POSITION LOCKED' : time >= TIMING.fix ? 'STAR MATCHING' : time >= TIMING.coast ? 'INERTIAL ONLY' : 'INITIALIZING';
-  $('phase-code').textContent = `SEQ ${String(state.phase + 1).padStart(2, '0')} / 06`;
-  $('scene-caption').textContent = state.complete ? 'Mission complete. Home, without a ground link.' : captions[state.phase];
-  const logKey = state.logs.map(({ at }) => at).join(',');
+  $('range').textContent = formatDistance(state.range);
+  $('fuel').textContent = `${state.fuel.toFixed(2)} kg`;
+  $('perigee').textContent = `${Math.round(state.perigee).toLocaleString('en-US')} km`;
+  $('perigee').classList.toggle('locked', state.perigee >= 200);
+  $('altitude').textContent = `${state.alt.toFixed(1)} km`;
+  $('phase').textContent = phaseLabel(state.phase).toUpperCase();
+  $('leg').textContent = (state.leg || '-').toUpperCase();
+  $('clearance').textContent = formatDistance(Math.max(0, state.clear));
+  $('scene-caption').textContent = CAPTIONS[state.phase] ?? '';
+  $('thrusters').replaceChildren(...run.data.thrusters.flatMap((name) => {
+    const dt = document.createElement('dt');
+    dt.textContent = name;
+    const dd = document.createElement('dd');
+    const truth = document.createElement('span');
+    truth.textContent = `${Math.round(state.health[name] * 100)}%`;
+    if (state.health[name] === 0) truth.className = 'failed';
+    dd.append(truth, ` / ${Math.round(state.est[name] * 100)}%`);
+    dd.classList.toggle('firing', state.thrust[name] > 0.01);
+    return [dt, dd];
+  }));
+
+  const logs = run.eventsUntil(time).slice(-3);
+  const logKey = logs.map((e) => `${e.t}${e.type}`).join(',');
   if (logKey !== lastLog) {
     lastLog = logKey;
-    $('log').replaceChildren(...state.logs.map(({ at, text }) => {
+    $('log').replaceChildren(...logs.map((e) => {
       const li = document.createElement('li');
       const timestamp = document.createElement('time');
-      timestamp.textContent = formatMET(at);
-      li.append(timestamp, document.createTextNode(text));
+      timestamp.textContent = formatMET(e.t);
+      const source = document.createElement('span');
+      source.className = `source ${e.source}`;
+      source.textContent = e.source === 'truth' ? 'TRUTH' : 'CONTROLLER';
+      timestamp.append(source);
+      li.append(timestamp, document.createTextNode(e.text));
       return li;
     }));
   }
+
+  const ended = time >= run.duration;
+  const pass = summary.outcome === summary.expected_outcome && !summary.collision;
+  $('outcome').textContent = ended ? `OUTCOME ${summary.outcome}` : 'IN FLIGHT';
+  $('outcome').className = ended ? (pass ? 'pass' : 'fail') : '';
+  $('expected').textContent = `EXPECTED ${summary.expected_outcome}`;
+
+  const phase = run.phaseIndex(time);
   phaseButtons.forEach((button, index) => {
-    const active = index === state.phase && !state.complete;
+    const active = index === phase;
     button.classList.toggle('active', active);
-    button.classList.toggle('done', index < state.phase || state.complete);
+    button.classList.toggle('done', index < phase);
     if (active) button.setAttribute('aria-current', 'step');
     else button.removeAttribute('aria-current');
   });
   $('timeline').value = time;
-  $('timeline').setAttribute('aria-valuetext', `${state.complete ? 'Mission complete' : PHASES[state.phase]}, ${time.toFixed(1)} seconds`);
-  $('timeline').style.setProperty('--progress', `${time / TIMING.loop * 100}%`);
-  $('elapsed').textContent = `${String(Math.floor(time)).padStart(2, '0')} / 46s`;
+  $('timeline').setAttribute('aria-valuetext', `${phaseLabel(state.phase)}, ${formatMET(time)}`);
+  $('timeline').style.setProperty('--progress', `${time / run.duration * 100}%`);
+  $('elapsed').textContent = `${formatMET(time)} / ${formatMET(run.duration).slice(2)}`;
   $('play').setAttribute('aria-label', playback.playing ? 'Pause mission' : 'Play mission');
   $('play-text').textContent = playback.playing ? 'Pause' : 'Play';
   $('play-icon').textContent = playback.playing ? 'Ⅱ' : '▷';
-  $('playback-status').textContent = contextLost ? '3D VIEW INTERRUPTED' : playback.playing ? 'AUTOPLAY / 46 SECOND LOOP' : 'PAUSED / EXPLORE THE MISSION';
-  // Fade the scene at the loop seam; explicit stills remain fully visible.
-  $('viewport').style.opacity = playback.playing ? Math.min(1, time / 0.8, (TIMING.loop - time) / 1.2) : 1;
+  $('playback-status').textContent = contextLost ? '3D VIEW INTERRUPTED' : playback.playing ? `PLAYING AT ${playback.speed}x` : 'PAUSED';
 }
 
 function render() {
+  if (!playback) return;
   if (available && !contextLost) scene.render(playback.time);
   updateUI(playback.time);
 }
 
 function schedule() {
-  if (request === null && playback.playing && !document.hidden && !contextLost) request = requestAnimationFrame(frame);
+  if (request === null && playback?.playing && !document.hidden && !contextLost) request = requestAnimationFrame(frame);
 }
 
 function frame(now) {
@@ -77,10 +114,56 @@ function frame(now) {
 }
 
 function setPlaying(playing) {
-  if (contextLost) return;
+  if (contextLost || !playback) return;
   playback.setPlaying(playing);
   if (request !== null) cancelAnimationFrame(request);
   request = null;
+  render();
+  schedule();
+}
+
+async function loadScenario(name, frozen = null) {
+  const response = await fetch(`${runsUrl}${name}.json`);
+  if (!response.ok) throw new Error(`Run ${name}: HTTP ${response.status}`);
+  run = createRun(await response.json());
+  const speed = autoSpeed(run.duration);
+  const time = frozen === null ? 0 : parseFrozenTime(frozen, run.duration) ?? 0;
+  const wasPlaying = playback ? playback.playing : frozen === null && !reduceMotion.matches;
+  playback = createPlayback(run.duration, time, wasPlaying, speed);
+  lastLog = '';
+  if (available) scene.setRun(run);
+
+  const summary = run.data.summary;
+  $('scenario-name').textContent = name.replaceAll('_', ' ').toUpperCase();
+  $('scenario-faults').textContent = run.data.faults.toUpperCase();
+  $('description').textContent = `${run.data.faults === 'no faults' ? 'No faults injected.' : `Fault: ${run.data.faults}.`} `
+    + `Expected outcome: ${summary.expected_outcome.toLowerCase()}. Outcome: ${summary.outcome.toLowerCase()} at ${formatMET(summary.outcome_t ?? run.duration)}.`
+    + (summary.reentry ? ` Reentry at ${formatMET(summary.reentry.t)}.` : '');
+  $('timeline').max = run.duration;
+  $('speed').replaceChildren(...[...new Set([...SPEEDS, speed])].sort((a, b) => a - b).map((value) => {
+    const option = new Option(`${value}x`, value);
+    option.selected = value === speed;
+    return option;
+  }));
+  document.documentElement.style.setProperty('--phase-count', run.phaseStarts.length);
+  $('phases').replaceChildren(...run.phaseStarts.map(({ phase, t }, i) => {
+    const li = document.createElement('li');
+    const button = document.createElement('button');
+    button.type = 'button';
+    const number = document.createElement('span');
+    number.textContent = String(i + 1).padStart(2, '0');
+    button.append(number, phaseLabel(phase));
+    button.addEventListener('click', () => {
+      playback.seek(t);
+      setPlaying(false);
+    });
+    li.append(button);
+    return li;
+  }));
+  phaseButtons = [...$('phases').querySelectorAll('button')];
+  const url = new URL(location.href);
+  url.searchParams.set('scenario', name);
+  history.replaceState(null, '', url);
   render();
   schedule();
 }
@@ -94,17 +177,21 @@ $('timeline').addEventListener('input', (event) => {
   playback.seek(Number(event.target.value));
   setPlaying(false);
 });
-phaseButtons.forEach((button) => button.addEventListener('click', () => {
-  playback.seek(Number(button.dataset.time));
-  setPlaying(false);
-}));
+$('scenario').addEventListener('change', (event) => {
+  loadScenario(event.target.value).catch(showLoadError);
+});
+$('speed').addEventListener('change', (event) => {
+  playback.speed = Number(event.target.value);
+  playback.resetFrame();
+  render();
+});
 
 window.addEventListener('resize', () => {
   if (available && !contextLost) scene.resize();
   render();
 });
 document.addEventListener('visibilitychange', () => {
-  playback.resetFrame();
+  playback?.resetFrame();
   if (document.hidden && request !== null) {
     cancelAnimationFrame(request);
     request = null;
@@ -120,15 +207,21 @@ function showFallback(message) {
   document.body.classList.add('render-fallback');
 }
 
+function showLoadError(error) {
+  console.warn(error);
+  $('render-status').textContent = `The simulator run could not be loaded (${error.message}). Reload to retry.`;
+  $('render-status').hidden = false;
+}
+
 $('scene').addEventListener('webglcontextlost', (event) => {
   event.preventDefault();
   contextLost = true;
-  playback.setPlaying(false);
+  playback?.setPlaying(false);
   if (request !== null) cancelAnimationFrame(request);
   request = null;
-  showFallback('The 3D view was interrupted. Your mission is paused while graphics recover.');
+  showFallback('The 3D view was interrupted. Playback is paused while graphics recover.');
   $('play').disabled = $('replay').disabled = true;
-  updateUI(playback.time);
+  if (playback) updateUI(playback.time);
 });
 $('scene').addEventListener('webglcontextrestored', () => {
   // Draw on the next frame, after Three.js has handled the restoration event
@@ -148,14 +241,26 @@ try {
   scene = createScene($('scene'), {
     invalidate: () => { if (available && !contextLost) render(); },
     onTextureError: () => {
-      $('render-status').textContent = 'Some planet textures could not load. The mission remains available; reload to retry.';
+      $('render-status').textContent = 'Some planet textures could not load. The replay remains available; reload to retry.';
       $('render-status').hidden = false;
     },
   });
   available = true;
 } catch (error) {
   console.warn('3D scene unavailable:', error.message);
-  showFallback('The 3D view is unavailable on this device. You can still play and explore the mission log below.');
+  showFallback('The 3D view is unavailable on this device. You can still play the run and read the telemetry.');
 }
-render();
-schedule();
+
+(async () => {
+  const response = await fetch(`${runsUrl}index.json`);
+  if (!response.ok) throw new Error(`Run index: HTTP ${response.status}`);
+  const index = await response.json();
+  const requested = params.get('scenario');
+  const name = index.some((entry) => entry.name === requested) ? requested : DEFAULT_SCENARIO;
+  $('scenario').replaceChildren(...index.map((entry) => {
+    const option = new Option(`${entry.name.replaceAll('_', ' ')} (${entry.faults})`, entry.name);
+    option.selected = entry.name === name;
+    return option;
+  }));
+  await loadScenario(name, params.get('t'));
+})().catch(showLoadError);

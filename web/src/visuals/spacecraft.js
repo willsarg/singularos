@@ -18,12 +18,21 @@ function plume(length, radius, tint) {
       }`,
     transparent: true, depthWrite: false, side: THREE.DoubleSide, blending: THREE.AdditiveBlending,
   }));
-  mesh.rotation.x = Math.PI / 2;
-  mesh.position.z = -0.87 - length / 2;
+  mesh.position.y = -length / 2;
   return mesh;
 }
 
-export function createSpacecraft(textures) {
+// A group of plumes whose nozzle sits at origin and whose exhaust points along
+// direction; scaling the group's y axis shortens the exhaust.
+function jet(origin, direction, plumes) {
+  const group = new THREE.Group();
+  group.position.set(...origin);
+  group.quaternion.setFromUnitVectors(new THREE.Vector3(0, -1, 0), new THREE.Vector3(...direction));
+  for (const [length, radius, tint] of plumes) group.add(plume(length, radius, tint));
+  return group;
+}
+
+export function createSpacecraft(textures, { wings = true } = {}) {
   const craft = new THREE.Group();
   const materials = {
     hull: new THREE.MeshStandardMaterial({ map: textures.hull, color: 0xe7e5df, metalness: 0.48, roughness: 0.38 }),
@@ -79,9 +88,11 @@ export function createSpacecraft(textures) {
     cylinder(0.048, 0.048, 0.01, 'glass', [side * 0.24, 0.43, 0.44]);
     box([0.035, 0.025, 0.025], 'indicator', [side * 0.2, 0.468, 0.24]);
     // Hinged booms and three independently framed panels per wing.
-    cylinder(0.055, 0.055, 0.5, 'silver', [side * 0.58, 0, -0.12], [0, 0, Math.PI / 2]);
-    cylinder(0.09, 0.09, 0.13, 'dark', [side * 0.83, 0, -0.12], [0, 0, Math.PI / 2]);
-    for (let section = 0; section < 3; section++) {
+    for (let section = 0; wings && section < 3; section++) {
+      if (section === 0) {
+        cylinder(0.055, 0.055, 0.5, 'silver', [side * 0.58, 0, -0.12], [0, 0, Math.PI / 2]);
+        cylinder(0.09, 0.09, 0.13, 'dark', [side * 0.83, 0, -0.12], [0, 0, Math.PI / 2]);
+      }
       const x = side * (1.15 + section * 0.59);
       box([0.575, 0.98, 0.04], 'silver', [x, 0, -0.12]);
       box([0.541, 0.941, 0.047], 'solar', [x, 0, -0.12]);
@@ -109,6 +120,7 @@ export function createSpacecraft(textures) {
     add(new THREE.SphereGeometry(0.017, 8, 6), 'indicator', [side * 0.365, 0.99, -0.42]);
   }
   for (const [name, geometries] of parts) {
+    if (!geometries.length) continue;
     const geometry = mergeGeometries(geometries);
     for (const part of geometries) part.dispose();
     const mesh = new THREE.Mesh(geometry, materials[name]);
@@ -116,9 +128,16 @@ export function createSpacecraft(textures) {
     craft.add(mesh);
   }
 
-  const flame = plume(2.2, 0.23, 0x51a9ff);
-  const core = plume(1.4, 0.09, 0xd4eaff);
-  craft.add(flame, core);
+  // One jet per sim thruster. Model +z is the nose (body +x) and model +x is
+  // the body's left side (body +y); each jet exhausts opposite its push.
+  const jets = {
+    forward: jet([0, 0, -0.87], [0, 0, -1], [[2.2, 0.23, 0x51a9ff], [1.4, 0.09, 0xd4eaff]]),
+    backward: jet([0, 0, 0.94], [0, 0, 1], [[0.9, 0.1, 0x51a9ff], [0.6, 0.04, 0xd4eaff]]),
+    left: jet([-0.5, 0, -0.56], [-1, 0, 0], [[0.9, 0.1, 0x51a9ff], [0.6, 0.04, 0xd4eaff]]),
+    right: jet([0.5, 0, -0.56], [1, 0, 0], [[0.9, 0.1, 0x51a9ff], [0.6, 0.04, 0xd4eaff]]),
+  };
+  craft.add(...Object.values(jets));
+  const plumes = Object.values(jets).flatMap((group) => group.children);
   const engineLight = new THREE.PointLight(0x75baff, 0, 3, 2);
   engineLight.position.z = -1.1;
   craft.add(engineLight);
@@ -145,12 +164,15 @@ export function createSpacecraft(textures) {
   craft.add(heat);
   return {
     craft,
-    update(time, burning, reentry) {
-      flame.visible = core.visible = burning;
-      flame.material.uniforms.time.value = core.material.uniforms.time.value = time;
-      flame.scale.y = 1 + 0.045 * Math.sin(time * 73);
-      core.scale.y = 1 + 0.03 * Math.sin(time * 117);
-      engineLight.intensity = burning ? 2.3 : 0;
+    // thrust: delivered thrust per thruster as a fraction of its maximum.
+    update(time, thrust, reentry) {
+      for (const [name, group] of Object.entries(jets)) {
+        const level = thrust[name] ?? 0;
+        group.visible = level > 0.01;
+        group.scale.set(0.6 + 0.4 * level, (0.35 + 0.65 * level) * (1 + 0.045 * Math.sin(time * 73)), 0.6 + 0.4 * level);
+      }
+      for (const mesh of plumes) mesh.material.uniforms.time.value = time;
+      engineLight.intensity = 2.3 * (thrust.forward ?? 0);
       heat.visible = reentry;
       heat.material.uniforms.time.value = time;
     },

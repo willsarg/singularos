@@ -1,16 +1,94 @@
 import * as THREE from 'three';
-import { TIMING, span, ease, missionState } from './mission.js';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import { canvasTexture, randomGenerator, surfaceTextures } from './visuals/textures.js';
 import { createEarth } from './visuals/earth.js';
 import { createSpacecraft } from './visuals/spacecraft.js';
 
+// Units are metres in the station frame of the simulator. Scene axes: +X is
+// along-track (sim +y), +Y is radial, away from Earth (sim +x), +Z is the
+// orbit normal. The sim is planar, so everything it moves stays at Z = 0.
 const CYAN = 0x79f4ef;
+const AMBER = 0xe8c788;
 const v = (x, y, z) => new THREE.Vector3(x, y, z);
-const RADIUS = 2.45;
+const toScene = (x, y) => v(y, x, 0);
+// Earth is drawn in its own pass, shrunk about the camera by EARTH_SCALE:
+// apparent size and direction are exact, depth stays in range.
+const EARTH_SCALE = 1e-3;
+const VIEW_DIRECTION = v(0.18, 0.34, 1).normalize();
+
+function buildStation(components, textures) {
+  const station = new THREE.Group();
+  const materials = {
+    hull: new THREE.MeshStandardMaterial({ map: textures.hull, color: 0xe7e5df, metalness: 0.48, roughness: 0.38 }),
+    foil: new THREE.MeshStandardMaterial({ color: 0xd5a453, metalness: 0.88, roughness: 0.42, bumpMap: textures.foil, bumpScale: 0.045 }),
+    silver: new THREE.MeshStandardMaterial({ color: 0xbcc5cd, metalness: 0.85, roughness: 0.25 }),
+    solar: new THREE.MeshPhysicalMaterial({ map: textures.solar, color: 0xcedfff, metalness: 0.6, roughness: 0.28, clearcoat: 0.8, clearcoatRoughness: 0.2 }),
+    radiator: new THREE.MeshStandardMaterial({ color: 0xdfe6ea, metalness: 0.2, roughness: 0.55 }),
+    port: new THREE.MeshBasicMaterial({ color: new THREE.Color(0.18, 1.8, 1.55) }),
+  };
+  for (const c of components) {
+    // Footprint in the orbital plane is the sim's rectangle exactly; depth
+    // along the orbit normal is not simulated and is chosen for looks.
+    const [x0, y0] = c.min_m;
+    const [x1, y1] = c.max_m;
+    const width = y1 - y0; // along-track
+    const height = x1 - x0; // radial
+    const centre = toScene((x0 + x1) / 2, (y0 + y1) / 2);
+    let mesh;
+    if (c.type === 'hull') {
+      mesh = new THREE.Mesh(new THREE.CylinderGeometry(width / 2, width / 2, height, 64), materials.hull);
+      const bands = new THREE.Group();
+      for (let i = 1; i < 4; i++) {
+        const band = new THREE.Mesh(new THREE.TorusGeometry(width / 2, 0.06, 8, 64), materials.silver);
+        band.rotation.x = Math.PI / 2;
+        band.position.y = -height / 2 + (height * i) / 4;
+        bands.add(band);
+      }
+      mesh.add(bands);
+    } else if (c.type === 'docking_port') {
+      mesh = new THREE.Mesh(new THREE.CylinderGeometry(width / 2, width / 2, height, 48), materials.foil);
+      const ring = new THREE.Mesh(new THREE.TorusGeometry(width / 2, 0.05, 8, 48), materials.port);
+      ring.rotation.x = Math.PI / 2;
+      ring.position.y = height / 2;
+      mesh.add(ring);
+    } else if (c.type === 'solar_array') {
+      mesh = new THREE.Mesh(new RoundedBoxGeometry(width, height, 0.12, 2, 0.04), materials.solar);
+      const frame = new THREE.Mesh(new THREE.BoxGeometry(width + 0.1, 0.08, 0.16), materials.silver);
+      for (const dy of [-height / 2, height / 2]) {
+        const edge = frame.clone();
+        edge.position.y = dy;
+        mesh.add(edge);
+      }
+    } else if (c.type === 'radiator') {
+      mesh = new THREE.Mesh(new RoundedBoxGeometry(width, height, 0.2, 2, 0.06), materials.radiator);
+    } else {
+      mesh = new THREE.Mesh(new RoundedBoxGeometry(width, height, Math.min(width, height), 2, 0.08), materials.foil);
+    }
+    mesh.position.copy(centre);
+    mesh.traverse((part) => { if (part.isMesh) part.castShadow = part.receiveShadow = true; });
+    mesh.userData.component = c.name;
+    station.add(mesh);
+  }
+  return station;
+}
+
+function ringSet(color, opacity) {
+  const group = new THREE.Group();
+  for (let axis = 0; axis < 3; axis++) {
+    const circle = new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints(Array.from({ length: 96 }, (_, i) => {
+      const a = i / 96 * Math.PI * 2;
+      return v(Math.cos(a), Math.sin(a), 0);
+    })), new THREE.LineBasicMaterial({ color, transparent: true, opacity }));
+    if (axis === 1) circle.rotation.x = Math.PI / 2;
+    if (axis === 2) circle.rotation.y = Math.PI / 2;
+    group.add(circle);
+  }
+  return group;
+}
 
 export function createScene(canvas, { invalidate = () => {}, onTextureError = () => {} } = {}) {
   const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true, powerPreference: 'high-performance' });
@@ -19,36 +97,60 @@ export function createScene(canvas, { invalidate = () => {}, onTextureError = ()
   renderer.toneMappingExposure = 1.05;
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFShadowMap;
-  const scene = new THREE.Scene();
-  scene.background = new THREE.Color(0x020409);
-  const camera = new THREE.PerspectiveCamera(37, 1, 0.1, 300);
+  renderer.autoClear = false;
+
   const textures = surfaceTextures();
   for (const texture of [textures.solar, textures.hull, textures.foil]) {
     texture.anisotropy = Math.min(renderer.capabilities.getMaxAnisotropy(), 8);
   }
-  const sunDirection = v(-3.8, 3.2, 1.6).normalize();
-  const planet = createEarth(RADIUS, sunDirection, renderer, invalidate, onTextureError);
-  scene.add(planet.earth);
-  const moon = new THREE.Mesh(new THREE.SphereGeometry(0.62, 64, 32), new THREE.MeshStandardMaterial({
-    color: 0xb5b4b2, map: textures.moon, bumpMap: textures.moon, bumpScale: 0.025, roughness: 1,
-  }));
-  moon.position.set(3.8, 2, -8);
-  scene.add(moon);
+  const sunDirection = v(-0.55, 0.62, 0.56).normalize();
 
-  scene.add(new THREE.AmbientLight(0x6a8bb5, 0.12));
+  // Background pass: stars and a true-scale Earth below the station's orbit.
+  const background = new THREE.Scene();
+  background.background = new THREE.Color(0x020409);
+  const backgroundCamera = new THREE.PerspectiveCamera(37, 1, 1, 4e4);
+  let planet = null;
+  let earthPivot = null;
+  let earthCentre = v(0, 0, 0);
+  const rand = randomGenerator(42);
+  const starPositions = [], starColors = [];
+  for (let i = 0; i < 2400; i++) {
+    const phi = rand() * Math.PI * 2;
+    const z = rand() * 2 - 1;
+    const k = Math.sqrt(1 - z * z);
+    starPositions.push(3e4 * k * Math.cos(phi), 3e4 * z, 3e4 * k * Math.sin(phi));
+    const brightness = 0.25 + rand() * 0.6;
+    starColors.push(brightness * 0.72, brightness * 0.9, brightness);
+  }
+  const starGeometry = new THREE.BufferGeometry();
+  starGeometry.setAttribute('position', new THREE.Float32BufferAttribute(starPositions, 3));
+  starGeometry.setAttribute('color', new THREE.Float32BufferAttribute(starColors, 3));
+  const starSprite = canvasTexture(64, 64, (ctx) => {
+    const glow = ctx.createRadialGradient(32, 32, 0, 32, 32, 32);
+    glow.addColorStop(0, '#ffffff'); glow.addColorStop(0.12, '#ffffff');
+    glow.addColorStop(0.35, 'rgba(210,225,255,0.25)'); glow.addColorStop(1, 'rgba(200,220,255,0)');
+    ctx.fillStyle = glow; ctx.fillRect(0, 0, 64, 64);
+  });
+  const stars = new THREE.Points(starGeometry, new THREE.PointsMaterial({
+    size: 2.6, vertexColors: true, sizeAttenuation: false, map: starSprite,
+    transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+  }));
+  background.add(stars);
+
+  // Foreground pass: station, vehicle, tracks.
+  const scene = new THREE.Scene();
+  const camera = new THREE.PerspectiveCamera(37, 1, 0.1, 1e6);
+  scene.add(new THREE.AmbientLight(0x6a8bb5, 0.16));
   const sun = new THREE.DirectionalLight(0xfff2dc, 3.1);
-  sun.position.copy(sunDirection).multiplyScalar(20);
   sun.castShadow = true;
   sun.shadow.mapSize.set(2048, 2048);
-  Object.assign(sun.shadow.camera, { left: -11, right: 11, top: 8, bottom: -8, near: 1, far: 50 });
   sun.shadow.bias = -0.00015;
   sun.shadow.normalBias = 0.02;
-  scene.add(sun);
-  const earthshine = new THREE.DirectionalLight(0x789bcf, 0.55);
-  earthshine.position.set(-3, -4, 5);
+  scene.add(sun, sun.target);
+  const earthshine = new THREE.DirectionalLight(0x789bcf, 0.6);
+  earthshine.position.set(0, -1, 0.2);
   scene.add(earthshine);
 
-  // A locally generated reflection environment supplies soft material highlights.
   const reflection = canvasTexture(512, 256, (ctx, width, height) => {
     const gradient = ctx.createLinearGradient(0, 0, 0, height);
     gradient.addColorStop(0, '#72839a');
@@ -71,138 +173,99 @@ export function createScene(canvas, { invalidate = () => {}, onTextureError = ()
   }
   restoreEnvironment();
 
-  // Half-float bloom is optional on devices without the required framebuffer support.
   let composer, bloom;
+  const backgroundPass = new RenderPass(background, backgroundCamera);
+  const foregroundPass = new RenderPass(scene, camera);
+  foregroundPass.clear = false;
+  foregroundPass.clearDepth = true;
   if (renderer.extensions.has('EXT_color_buffer_float')) {
     // Avoid multisampled half-float targets: some WebGL drivers expose float
     // color buffers but resolve these targets to black. Pixel ratio supplies AA.
     const target = new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType });
     composer = new EffectComposer(renderer, target);
-    composer.addPass(new RenderPass(scene, camera));
+    composer.addPass(backgroundPass);
+    composer.addPass(foregroundPass);
     bloom = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.32, 0.5, 1.15);
     composer.addPass(bloom);
     composer.addPass(new OutputPass());
   }
-  const rand = randomGenerator(42);
-  const starPositions = [], starColors = [];
-  for (let i = 0; i < 1800; i++) {
-    const phi = rand() * Math.PI * 2;
-    const z = rand() * 2 - 1;
-    const radius = 65 + rand() * 100;
-    const k = Math.sqrt(1 - z * z);
-    starPositions.push(radius * k * Math.cos(phi), radius * z, radius * k * Math.sin(phi));
-    const brightness = 0.25 + rand() * 0.6;
-    starColors.push(brightness * 0.72, brightness * 0.9, brightness);
-  }
-  const starGeometry = new THREE.BufferGeometry();
-  starGeometry.setAttribute('position', new THREE.Float32BufferAttribute(starPositions, 3));
-  starGeometry.setAttribute('color', new THREE.Float32BufferAttribute(starColors, 3));
-  const starSprite = canvasTexture(64, 64, (ctx) => {
-    const glow = ctx.createRadialGradient(32, 32, 0, 32, 32, 32);
-    glow.addColorStop(0, '#ffffff'); glow.addColorStop(0.12, '#ffffff');
-    glow.addColorStop(0.35, 'rgba(210,225,255,0.25)'); glow.addColorStop(1, 'rgba(200,220,255,0)');
-    ctx.fillStyle = glow; ctx.fillRect(0, 0, 64, 64);
-  });
-  scene.add(new THREE.Points(starGeometry, new THREE.PointsMaterial({
-    size: 0.28, vertexColors: true, sizeAttenuation: true, map: starSprite,
-    transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
-  })));
 
-  // The guides are spatial overlays, not physical orbit predictions.
-  const orbitGuides = [];
-  for (const radius of [3.2, 5.1, 8.5]) {
-    const points = Array.from({ length: 181 }, (_, i) => {
-      const angle = i / 180 * Math.PI * 2;
-      return v(Math.cos(angle) * radius, -0.45, Math.sin(angle) * radius);
-    });
-    const guide = new THREE.Line(new THREE.BufferGeometry().setFromPoints(points), new THREE.LineBasicMaterial({
-      color: 0x40768b, transparent: true, opacity: radius === 3.2 ? 0.35 : 0.16,
-    }));
-    guide.userData.opacity = guide.material.opacity;
-    scene.add(guide);
-    orbitGuides.push(guide);
-  }
-
-  const outbound = new THREE.CubicBezierCurve3(v(3.3, 0.6, 2), v(4.8, 1.3, 4.8), v(7.9, 2.3, 3.3), v(7.7, 1.6, -0.8));
-  const returning = new THREE.CubicBezierCurve3(v(7.7, 1.6, -0.8), v(9, 0.4, -4), v(4.2, -0.3, -2), v(2.12, 0.5, 1.15));
-  const makeTrack = (curve, color, dashed = false) => {
-    const geometry = new THREE.BufferGeometry().setFromPoints(curve.getPoints(160));
-    const material = dashed
-      ? new THREE.LineDashedMaterial({ color, dashSize: 0.13, gapSize: 0.1, transparent: true, opacity: 0.4 })
-      : new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.7 });
-    const line = new THREE.Line(geometry, material);
-    if (dashed) line.computeLineDistances();
-    scene.add(line);
-    return line;
-  };
-  const outTrack = makeTrack(outbound, 0x527e94, true);
-  const planTrack = makeTrack(returning, CYAN, true);
-  const flownTrack = makeTrack(returning, CYAN);
-
-  const vehicle = createSpacecraft(textures);
+  const vehicle = createSpacecraft(textures, { wings: false });
   const { craft } = vehicle;
-  craft.scale.setScalar(0.92);
   scene.add(craft);
-  const landing = returning.getPoint(1);
-  const landingBeacon = new THREE.Mesh(new THREE.SphereGeometry(0.055, 12, 8), new THREE.MeshBasicMaterial({ color: CYAN }));
-  landingBeacon.position.copy(landing);
-  const landingRing = new THREE.Mesh(new THREE.TorusGeometry(0.19, 0.007, 6, 48), new THREE.MeshBasicMaterial({ color: CYAN, transparent: true, opacity: 0.6 }));
-  landingRing.position.copy(landing.clone().multiplyScalar(1.015));
-  landingRing.lookAt(landing.clone().multiplyScalar(2));
-  scene.add(landingBeacon, landingRing);
-  const uncertainty = new THREE.Group();
-  for (let axis = 0; axis < 3; axis++) {
-    const circle = new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints(Array.from({ length: 96 }, (_, i) => {
-      const a = i / 96 * Math.PI * 2;
-      return v(Math.cos(a), Math.sin(a), 0);
-    })), new THREE.LineBasicMaterial({ color: CYAN, transparent: true, opacity: 0.35 }));
-    if (axis === 1) circle.rotation.x = Math.PI / 2;
-    if (axis === 2) circle.rotation.y = Math.PI / 2;
-    uncertainty.add(circle);
-  }
-  scene.add(uncertainty);
-  const fixTargets = [v(-4, 7, -8), v(5, 6, -10), v(12, 1, -5), v(0, 0, 0), moon.position];
-  const sightlines = fixTargets.map((target, i) => {
-    const geometry = new THREE.BufferGeometry().setFromPoints([v(0, 0, 0), target]);
-    const line = new THREE.Line(geometry, new THREE.LineDashedMaterial({ color: 0xe8c788, dashSize: 0.12, gapSize: 0.1, transparent: true, opacity: 0.5 }));
-    scene.add(line);
-    if (i < 3) {
-      const beacon = new THREE.Mesh(new THREE.OctahedronGeometry(0.07), new THREE.MeshBasicMaterial({ color: 0xe8c788 }));
-      beacon.position.copy(target);
-      line.userData.beacon = beacon;
-      scene.add(beacon);
-    }
-    return line;
-  });
+  let station = null;
+  let run = null;
+  let flown = null;
+  const estimate = new THREE.Mesh(new THREE.OctahedronGeometry(1), new THREE.MeshBasicMaterial({ color: AMBER, wireframe: true }));
+  const estimateRings = ringSet(AMBER, 0.55);
+  const dock = ringSet(CYAN, 0.35);
+  scene.add(estimate, estimateRings, dock);
 
-  let narrow = false;
-  let viewWidth = 0;
-  let viewHeight = 0;
-  const labelEarth = document.querySelector('.earth-label');
-  const labelCraft = document.querySelector('.craft-label');
-  const projected = v(0, 0, 0);
-  const attitude = new THREE.Matrix4();
-  const origin = v(0, 0, 0);
-  const up = v(0, 1, 0);
-  const label = (element, position, offsetY = 0) => {
-    projected.copy(position).project(camera);
-    const width = viewWidth;
-    const height = viewHeight;
-    const x = (projected.x + 1) * width / 2;
-    const y = (1 - projected.y) * height / 2 + offsetY;
-    const visible = projected.z > -1 && projected.z < 1 && x > 20 && x < width - 140 && y > 80 && y < height - 200;
-    element.style.transform = `translate(${x}px, ${y}px)`;
-    element.style.opacity = visible ? '1' : '0';
+  let viewWidth = 0, viewHeight = 0, narrow = false;
+  const labels = {
+    earth: document.querySelector('.earth-label'),
+    craft: document.querySelector('.craft-label'),
+    station: document.querySelector('.station-label'),
   };
+  const projected = v(0, 0, 0);
+  const placeLabel = (element, position, cam, visible = true, offsetY = 0) => {
+    if (!element) return;
+    projected.copy(position).project(cam);
+    const x = (projected.x + 1) * viewWidth / 2;
+    const y = (1 - projected.y) * viewHeight / 2 + offsetY;
+    const onScreen = projected.z > -1 && projected.z < 1 && x > 20 && x < viewWidth - 140 && y > 80 && y < viewHeight - 200;
+    element.style.transform = `translate(${x}px, ${y}px)`;
+    element.style.opacity = visible && onScreen ? '1' : '0';
+  };
+
+  function setRun(next) {
+    run = next;
+    const { data } = run;
+    if (station) scene.remove(station);
+    station = buildStation(data.station, textures);
+    scene.add(station);
+    // The wingless model spans about 2 units; match the sim's vehicle disc.
+    craft.scale.setScalar(data.vehicle_radius_m);
+    estimate.scale.setScalar(data.vehicle_radius_m * 0.25);
+    dock.scale.setScalar(data.vehicle_radius_m * 1.5);
+    dock.position.copy(toScene(0.2, 0));
+
+    if (!planet) {
+      // Thin shells at true scale: clouds about 10 km up, the visible
+      // atmosphere about 80 km.
+      planet = createEarth(data.orbit.earth_radius_m * EARTH_SCALE, sunDirection, renderer, invalidate, onTextureError,
+        { cloudHeight: 10e3 / data.orbit.earth_radius_m, airHeight: 80e3 / data.orbit.earth_radius_m });
+      earthPivot = new THREE.Group();
+      earthPivot.add(planet.earth);
+      planet.earth.rotation.set(0.35, 2.6, 0);
+      background.add(earthPivot);
+    }
+    earthCentre = v(0, -data.orbit.station_radius_m, 0);
+
+    if (flown) { scene.remove(flown); flown.geometry.dispose(); }
+    const s = data.samples;
+    const positions = new Float32Array(s.t.length * 3);
+    s.t.forEach((_, i) => {
+      positions[i * 3] = s.y[i];
+      positions[i * 3 + 1] = s.x[i];
+    });
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    flown = new THREE.Line(geometry, new THREE.LineBasicMaterial({ color: CYAN, transparent: true, opacity: 0.75 }));
+    flown.frustumCulled = false;
+    scene.add(flown);
+  }
 
   function resize() {
     const bounds = canvas.parentElement.getBoundingClientRect();
     viewWidth = bounds.width;
     viewHeight = bounds.height;
     narrow = viewWidth < 760;
-    camera.aspect = viewWidth / viewHeight;
-    camera.fov = narrow ? 52 : 37;
-    camera.updateProjectionMatrix();
+    for (const cam of [camera, backgroundCamera]) {
+      cam.aspect = viewWidth / viewHeight;
+      cam.fov = narrow ? 52 : 37;
+      cam.updateProjectionMatrix();
+    }
     const pixelRatio = Math.min(window.devicePixelRatio || 1, narrow ? 1.25 : 1.75);
     renderer.setPixelRatio(pixelRatio);
     renderer.setSize(viewWidth, viewHeight, false);
@@ -211,78 +274,82 @@ export function createScene(canvas, { invalidate = () => {}, onTextureError = ()
       composer.setSize(viewWidth, viewHeight);
       bloom.strength = narrow ? 0.22 : 0.32;
     }
-    sun.shadow.mapSize.set(narrow ? 1024 : 2048, narrow ? 1024 : 2048);
-    if (sun.shadow.map && sun.shadow.map.width !== sun.shadow.mapSize.x) {
-      sun.shadow.map.dispose(); sun.shadow.map = null;
-    }
   }
 
+  const nose = v(0, 0, 0), left = v(0, 0, 0), up = v(0, 0, 0), basis = new THREE.Matrix4();
   function render(time) {
-    const state = missionState(time);
-    const outK = ease(span(time, TIMING.coast, TIMING.fix));
-    const backK = ease(span(time, TIMING.burn, TIMING.done));
-    const curve = time < TIMING.burn ? outbound : returning;
-    const progress = time < TIMING.burn ? outK : backK;
-    craft.position.copy(curve.getPoint(progress));
-    const direction = curve.getTangent(progress).normalize();
-    // Reorient toward the return path before ignition; freeze at the same attitude when paused.
-    if (time >= TIMING.plan && time < TIMING.burn) direction.lerp(returning.getTangent(0), ease(span(time, 22, 25.5))).normalize();
-    craft.quaternion.setFromRotationMatrix(attitude.lookAt(direction, origin, up));
-    craft.rotateZ(0.14 * Math.sin(time * 0.22));
-    vehicle.update(time, state.burning, time >= TIMING.reentry && time < TIMING.done);
-    craft.visible = time < TIMING.done;
-    landingBeacon.visible = landingRing.visible = time >= TIMING.reentry;
-    landingRing.scale.setScalar(1 + 0.3 * Math.sin(time * 2));
+    if (!run) return;
+    const state = run.sample(time);
+    const position = toScene(state.x, state.y);
+    craft.position.copy(position);
+    // Body +x (nose) and body +y (left) in the station frame, mapped to the
+    // model's +z and +x.
+    const c = Math.cos(state.heading), s = Math.sin(state.heading);
+    nose.copy(toScene(c, s));
+    left.copy(toScene(-s, c));
+    up.crossVectors(nose, left);
+    craft.quaternion.setFromRotationMatrix(basis.makeBasis(left, up, nose));
+    vehicle.update(time, state.thrust, false);
+    flown.geometry.setDrawRange(0, run.sampleIndex(time) + 1);
 
-    planet.update(time);
-    moon.rotation.y = time * 0.025;
-    outTrack.geometry.setDrawRange(0, Math.max(0, Math.floor(outK * 160) + 1));
-    outTrack.visible = time >= TIMING.coast;
-    planTrack.geometry.setDrawRange(0, Math.floor(ease(span(time, TIMING.plan, TIMING.burn)) * 160) + 1);
-    planTrack.visible = time >= TIMING.plan;
-    flownTrack.geometry.setDrawRange(0, Math.floor(backK * 160) + 1);
-    flownTrack.visible = time >= TIMING.burn;
-    uncertainty.position.copy(craft.position);
-    uncertainty.visible = time >= 6 && time < TIMING.plan;
-    const spread = time < TIMING.fix ? span(time, 5, 14) : 1 - ease(span(time, 14, 22));
-    uncertainty.scale.setScalar(0.35 + spread * 1.7);
-    uncertainty.rotation.set(time * 0.08, time * 0.11, 0);
-    sightlines.forEach((line, i) => {
-      line.visible = time >= TIMING.fix + i * 0.8 && time < TIMING.plan;
-      if (line.userData.beacon) line.userData.beacon.visible = line.visible;
-      const attribute = line.geometry.attributes.position;
-      attribute.setXYZ(0, craft.position.x, craft.position.y, craft.position.z);
-      attribute.needsUpdate = true;
-      line.geometry.computeBoundingSphere();
-      if (line.visible) line.computeLineDistances();
-    });
-
-    const approach = ease(span(time, 32, 41));
-    const orbit = Math.sin(time / TIMING.loop * Math.PI) * 0.7;
-    const close = ease(span(time, 20, 26)) * (1 - ease(span(time, 29, 36)));
-    const target = v(2.5 - approach, 1.5, 0);
-    if (narrow) {
-      const portrait = span(viewWidth / viewHeight, 0.75, 0.45);
-      camera.position.set(-0.8 + orbit, 7.2 - approach, 24 + portrait * 5.5 - approach * 4);
-      target.set(2.7 + portrait * 0.9 - approach * 1.8, 1.3, 0);
-      // Move the scene into the space between the introduction and telemetry.
-      camera.setViewOffset(viewWidth, viewHeight, 0, viewHeight * 0.025, viewWidth, viewHeight);
-    } else {
-      camera.clearViewOffset();
-      const wide = v(-2 + orbit, 5.5 - approach, 24 - approach * 3);
-      const closePosition = craft.position.clone().add(v(4.2, 2.4, 7.8));
-      target.lerp(craft.position.clone().add(v(0.4, -0.25, 0)), close * 0.85);
-      camera.position.copy(wide.lerp(closePosition, close * 0.85));
+    estimate.visible = estimateRings.visible = state.nav !== null;
+    if (state.nav) {
+      estimate.position.copy(toScene(state.nav.x, state.nav.y));
+      estimateRings.position.copy(estimate.position);
+      // 3-sigma position uncertainty of the navigation sensor.
+      estimateRings.scale.setScalar(Math.max(3 * run.data.nav_sigma_m, 0.02));
+      estimate.rotation.set(time * 0.4, time * 0.6, 0);
     }
+
+    // Frame the station and the vehicle; the radius comes from a window
+    // around this time, so the view widens before the vehicle gets there.
+    const radius = Math.max(narrow ? 30 : 24, state.frame * 1.1);
+    const target = position.clone().multiplyScalar(0.5);
+    if (!narrow) target.x -= radius * 0.18; // leave room for the telemetry panel
+    const distance = radius / Math.sin(THREE.MathUtils.degToRad(camera.fov / 2));
+    camera.position.copy(target).addScaledVector(VIEW_DIRECTION, distance);
+    camera.near = Math.max(0.05, distance * 0.002);
+    camera.far = distance * 50;
+    camera.updateProjectionMatrix();
     camera.lookAt(target);
-    orbitGuides.forEach((guide) => { guide.material.opacity = guide.userData.opacity * (1 - close * 0.7); });
+
+    // The Earth turns under the station once per orbit: the frame co-rotates.
+    const n = 2 * Math.PI / run.data.orbit.period_s;
+    earthPivot.rotation.z = -n * time;
+    backgroundCamera.quaternion.copy(camera.quaternion);
+    backgroundCamera.position.set(0, 0, 0);
+    earthPivot.position.copy(earthCentre).sub(camera.position).multiplyScalar(EARTH_SCALE);
+
+    const shadowsOn = radius < 200;
+    sun.castShadow = shadowsOn;
+    sun.target.position.copy(target);
+    sun.position.copy(target).addScaledVector(sunDirection, radius * 4);
+    Object.assign(sun.shadow.camera, { left: -radius, right: radius, top: radius, bottom: -radius, near: radius, far: radius * 8 });
+    sun.shadow.camera.updateProjectionMatrix();
+
     if (composer) composer.render();
-    else renderer.render(scene, camera);
-    label(labelEarth, v(-0.6, -2.7, 0));
-    label(labelCraft, craft.position, 48);
-    labelCraft.style.opacity = craft.visible && !narrow ? labelCraft.style.opacity : '0';
+    else {
+      renderer.clear();
+      renderer.render(background, backgroundCamera);
+      renderer.clearDepth();
+      renderer.render(scene, camera);
+    }
+    const tiny = radius > 400;
+    placeLabel(labels.craft, position, camera, !narrow, 28);
+    placeLabel(labels.station, toScene(-7, 0), camera, !narrow && tiny, 0);
+    // Earth label on the horizon ahead of the camera.
+    const re = run.data.orbit.earth_radius_m;
+    const radial = camera.position.clone().sub(earthCentre);
+    const r = radial.length();
+    radial.divideScalar(r);
+    // Swung left of centre so the label clears the station.
+    const ahead = camera.getWorldDirection(v(0, 0, 0)).projectOnPlane(radial).normalize().applyAxisAngle(radial, 0.45);
+    const dip = Math.acos(Math.min(1, re / r));
+    const horizon = ahead.multiplyScalar(Math.cos(dip)).addScaledVector(radial, -Math.sin(dip))
+      .multiplyScalar(Math.sqrt(Math.max(0, r * r - re * re)) * EARTH_SCALE);
+    placeLabel(labels.earth, horizon, backgroundCamera, true, 12);
   }
 
   resize();
-  return { render, resize, restore: restoreEnvironment };
+  return { render, resize, setRun, restore: restoreEnvironment };
 }

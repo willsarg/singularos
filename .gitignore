@@ -78,3 +78,6 @@ docker/shared/
 
 # Simulator run output
 sim_1/runs/
+
+# Simulator runs exported for the 3D site (pnpm run export-runs)
+web/public/runs/
