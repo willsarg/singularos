@@ -29,7 +29,7 @@ function updateAdvice(time) {
   if (adviceRun === run && lastAdvice === advice) return;
   adviceRun = run;
   lastAdvice = advice;
-  $('advice-backend').textContent = metadata.backend === 'ollama' ? 'OLLAMA' : 'MODEL';
+  $('advice-backend').textContent = { 'workers-ai': 'WORKERS AI', ollama: 'OLLAMA' }[metadata.backend] ?? 'MODEL';
   $('advice-model').textContent = metadata.model?.split('/').at(-1) || 'Configured model';
   $('advice-model').title = metadata.model || '';
   $('advice-details').hidden = !advice || !!advice.error;

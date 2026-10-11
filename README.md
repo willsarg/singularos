@@ -45,18 +45,19 @@ paused scenes use mission time throughout.
 `web/public/runs/` before running. `pnpm run export-runs` regenerates them
 explicitly after simulator changes while a development server is already open.
 
-For a demo with recorded Ollama advice, start Ollama with the model configured
-in the [simulator's LLM settings](SingularityReturnHome/README.md#llm-advisor),
-then run from `web/`:
+For a demo with recorded model advice from Cloudflare Workers AI
+(`@cf/qwen/qwen3.8-27b`; see the
+[simulator's LLM settings](SingularityReturnHome/README.md#llm-advisor)), run
+from `web/` with a Workers AI API token:
 
 ```sh
-pnpm run build:demo
+CLOUDFLARE_ACCOUNT_ID=<account id> CLOUDFLARE_API_TOKEN=<token> pnpm run build:demo
 pnpm preview
 ```
 
 The demo build generates separate runs in `web/public/runs-llm/` and displays
 the model's proposal, rationale, and numerical check results at each decision
-point. Ollama runs during export; browser playback uses the recorded replies.
+point. The model runs during export; browser playback uses the recorded replies.
 The deterministic controller retains actuator authority. Missing server or
 model stops the export; individual advice failures appear in the replay while
 the controller continues. Normal development, tests, and builds remain offline

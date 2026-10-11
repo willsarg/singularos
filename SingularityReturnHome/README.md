@@ -25,7 +25,7 @@ recovery uses the two-body modules in this directory: `simulation/orbit.py`,
 | `telemetry/api.py` | HTTP API for the dashboard |
 | `telemetry/export_web.py` | Exports runs as playback data for the 3D site in `../web/` |
 | `dashboard/` | React dashboard |
-| `intelligence/` | LLM client (Ollama or OpenAI-compatible), recovery-proposal harness, check review, advisor |
+| `intelligence/` | LLM client (Cloudflare Workers AI, Ollama or OpenAI-compatible), recovery-proposal harness, check review, advisor |
 | `mission.py`, `control/` | One-shot two-body recovery script |
 | `tests/` | pytest suite |
 
@@ -91,11 +91,22 @@ logs the reply as an `llm_advice` event next to the deterministic decision,
 which keeps actuator authority. Without a reachable server and model, the
 run continues deterministic-only.
 
+The default backend is Cloudflare Workers AI with `@cf/qwen/qwen3.8-27b`. It
+needs an account ID and an API token with Workers AI Read and Workers AI Edit
+permissions (dashboard: AI > Workers AI > Use REST API > Create a Workers AI
+API Token):
+
 ```sh
-ollama pull hf.co/unsloth/Qwen3.5-9B-GGUF:Q4_K_M    # once, 5.7 GB
-ollama serve                                        # if not already running
+export CLOUDFLARE_ACCOUNT_ID=<account id> CLOUDFLARE_API_TOKEN=<token>
 .venv/bin/python -m singularos_sim scenarios/orbital_strike_safe_orbit.toml --llm
 ```
+
+Wrangler also reads `CLOUDFLARE_API_TOKEN`. A token with only Workers AI
+permissions cannot deploy the site, so set it for the simulator command
+rather than in the shell used for `pnpm run deploy`.
+
+Ollama remains available locally with `SINGULAROS_LLM_BACKEND=ollama`
+(`ollama pull hf.co/unsloth/Qwen3.5-9B-GGUF:Q4_K_M` once, 5.7 GB).
 
 To include advice in the Three.js demo, run `pnpm run build:demo` from `../web/`,
 then `pnpm preview`. This uses `telemetry.export_web --llm`, which requires a
@@ -108,17 +119,22 @@ Settings (environment):
 
 | Variable | Default | |
 |---|---|---|
-| `SINGULAROS_LLM_URL` | `http://127.0.0.1:11434` (`openai`: `http://127.0.0.1:8080`) | From inside a QEMU guest (user-mode networking): `http://10.0.2.2:11434` |
-| `SINGULAROS_LLM_MODEL` | `hf.co/unsloth/Qwen3.5-9B-GGUF:Q4_K_M` | Any name from `ollama list` |
-| `SINGULAROS_LLM_BACKEND` | `ollama` | `openai` for an OpenAI-compatible server, e.g. llama.cpp in `docker/` |
-| `SINGULAROS_LLM_THINK` | `false` | Ollama `think` option; `default` to not send it. With thinking on, Qwen3.5 9B did not return a schema-constrained reply within 300 s |
+| `CLOUDFLARE_ACCOUNT_ID` | none | `workers-ai`: account that runs the model |
+| `CLOUDFLARE_API_TOKEN` | none | `workers-ai`: Workers AI Read and Edit |
+| `SINGULAROS_LLM_BACKEND` | `workers-ai` | `ollama`; `openai` for an OpenAI-compatible server, e.g. llama.cpp in `docker/` |
+| `SINGULAROS_LLM_URL` | `https://api.cloudflare.com/client/v4` (`ollama`: `http://127.0.0.1:11434`; `openai`: `http://127.0.0.1:8080`) | From inside a QEMU guest (user-mode networking), Ollama on the host is `http://10.0.2.2:11434` |
+| `SINGULAROS_LLM_MODEL` | `@cf/qwen/qwen3.8-27b` (`ollama`: `hf.co/unsloth/Qwen3.5-9B-GGUF:Q4_K_M`) | |
+| `SINGULAROS_LLM_THINK` | `false` | Model reasoning; `default` leaves it to the server. On the recovery prompts qwen3.8-27b replied in about 7 s with thinking off and 30-95 s with it on (`reasoning_effort` low) |
 | `SINGULAROS_LLM_TIMEOUT` | `180` | Seconds per request |
 
 Pipeline (`intelligence/`, harness from PR #3):
 
 1. `llm.py` sends the chat with the proposal schema as structured output
-   (Ollama: `POST /api/chat` with `format`; OpenAI-compatible:
-   `response_format` `json_schema`).
+   (Workers AI: `POST /accounts/{account}/ai/run/{model}` with
+   `response_format` `json_schema`, which Workers AI compiles into a
+   decoding grammar; `uniqueItems` is not supported there and is removed
+   from the request. Ollama: `POST /api/chat` with `format`;
+   OpenAI-compatible: `response_format` `json_schema`).
 2. `harness.py` re-checks the reply against the schema in Python, then
    semantic rules (e.g. `DOCKED` must request `DOCK_ALIGNMENT` and
    `OBSERVATION_FRESHNESS`; `RAISE_PERIGEE` must request `FUEL_BUDGET` and
@@ -135,8 +151,9 @@ section 8 vocabulary; plan actions include `BRAKE` and `RAISE_PERIGEE`;
 orbit-scale recovery.
 
 `mission.py` and `intelligence/assess.py` use the same client for their
-incident summaries. Tests run against an in-process fake Ollama server; set
-`SINGULAROS_LLM_INTEGRATION=1` to also test the configured live server.
+incident summaries. Tests run against an in-process fake server (Workers AI,
+Ollama and OpenAI-compatible endpoints); set `SINGULAROS_LLM_INTEGRATION=1`
+to also test the configured live server.
 
 ## Physics
 

@@ -10,7 +10,7 @@ from intelligence.advisor import RecoveryAdvisor, context_text
 from intelligence.harness import (
     Proposal, ProposalValidationError, RecoveryHarness, load_schema, schema_problems, semantic_problems,
 )
-from intelligence.llm import LLMClient, LLMConfig
+from intelligence.llm import LLMClient, LLMConfig, LLMError
 from intelligence.review import review
 from singularos_sim.config import load_config
 from singularos_sim.runner import run_scenario
@@ -31,13 +31,21 @@ def proposal(**overrides):
     return p
 
 
+ACCOUNT = "test-account"
+TOKEN = "test-token"
+CF_MODEL = "@cf/qwen/qwen3.8-27b"
+
+
 class FakeOllama:
-    """Minimal Ollama API: /api/version, /api/tags, /api/chat. Replies to
-    /api/chat with the queued contents in order, repeating the last one."""
+    """Minimal model server: Ollama /api/version, /api/tags, /api/chat;
+    OpenAI-compatible /v1/chat/completions; Workers AI
+    /accounts/{account}/ai/run/{model} and /ai/models/search. Replies with the
+    queued contents in order, repeating the last one."""
 
     def __init__(self, replies):
         self.replies = list(replies)
         self.requests = []
+        self.auth = []
         fake = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -53,7 +61,10 @@ class FakeOllama:
                 self.wfile.write(body)
 
             def do_GET(self):
-                if self.path == "/health":
+                if self.path.startswith(f"/accounts/{ACCOUNT}/ai/models/search"):
+                    fake.auth.append(self.headers.get("Authorization"))
+                    self.send({"success": True, "result": [{"name": CF_MODEL}, {"name": "@cf/qwen/qwq-32b"}]})
+                elif self.path == "/health":
                     self.send({"status": "ok"})
                 elif self.path == "/api/version":
                     self.send({"version": "0.0.0-test"})
@@ -65,8 +76,13 @@ class FakeOllama:
             def do_POST(self):
                 body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
                 fake.requests.append((self.path, body))
+                fake.auth.append(self.headers.get("Authorization"))
                 content = fake.replies.pop(0) if len(fake.replies) > 1 else fake.replies[0]
-                if self.path == "/api/chat":
+                if self.path.startswith(f"/accounts/{ACCOUNT}/ai/run/"):
+                    self.send({"success": True, "errors": [], "result": {"choices": [
+                        {"message": {"role": "assistant", "content": content or None},
+                         "finish_reason": "stop" if content else "length"}]}})
+                elif self.path == "/api/chat":
                     self.send({"model": body["model"], "message": {"role": "assistant", "content": content},
                                "done": True, "done_reason": "stop"})
                 elif self.path == "/v1/chat/completions":  # llama.cpp llama-server
@@ -97,16 +113,26 @@ def ollama_factory():
 
 
 def client_for(server, **kw):
-    return LLMClient(LLMConfig(base_url=server.url, model=MODEL, **kw))
+    return LLMClient(LLMConfig(base_url=server.url, model=MODEL, **{"backend": "ollama", **kw}))
+
+
+def workers_ai_client(server, **kw):
+    return LLMClient(LLMConfig(base_url=server.url, model=CF_MODEL, account_id=ACCOUNT, api_token=TOKEN, **kw))
 
 
 # ------------------------------------------------------------- configuration
 
 
-def test_config_from_env_defaults_to_local_ollama():
+def test_config_from_env_defaults_to_workers_ai():
     c = LLMConfig.from_env({})
     assert (c.backend, c.base_url, c.model, c.think) == (
-        "ollama", "http://127.0.0.1:11434", "hf.co/unsloth/Qwen3.5-9B-GGUF:Q4_K_M", False)
+        "workers-ai", "https://api.cloudflare.com/client/v4", "@cf/qwen/qwen3.8-27b", False)
+    assert (c.account_id, c.api_token) == (None, None)
+    c = LLMConfig.from_env({"CLOUDFLARE_ACCOUNT_ID": "a", "CLOUDFLARE_API_TOKEN": "t"})
+    assert (c.account_id, c.api_token) == ("a", "t")
+    assert "api_token" not in repr(c)
+    ollama = LLMConfig.from_env({"SINGULAROS_LLM_BACKEND": "ollama"})
+    assert (ollama.base_url, ollama.model) == ("http://127.0.0.1:11434", "hf.co/unsloth/Qwen3.5-9B-GGUF:Q4_K_M")
     assert LLMConfig.from_env({"SINGULAROS_LLM_THINK": "default"}).think is None
     assert LLMConfig.from_env({"SINGULAROS_LLM_THINK": "true"}).think is True
     openai = LLMConfig.from_env({"SINGULAROS_LLM_BACKEND": "openai"})
@@ -119,7 +145,7 @@ def test_config_from_env_defaults_to_local_ollama():
 
 
 def test_unreachable_server_reports_unhealthy():
-    status = LLMClient(LLMConfig(base_url="http://127.0.0.1:9", model=MODEL)).health()
+    status = LLMClient(LLMConfig(base_url="http://127.0.0.1:9", model=MODEL, backend="ollama")).health()
     assert status["ok"] is False
 
 
@@ -141,22 +167,22 @@ def test_ollama_chat_request_uses_native_api_with_schema(ollama_factory):
 def test_ollama_health_checks_model_is_pulled(ollama_factory):
     server = ollama_factory(["{}"])
     assert client_for(server).health()["ok"]
-    assert LLMClient(LLMConfig(base_url=server.url, model="test-model")).health()["ok"]  # ":latest" implied
-    assert LLMClient(LLMConfig(base_url=server.url, model="TEST-MODEL:LATEST")).health()["ok"]
-    missing = LLMClient(LLMConfig(base_url=server.url, model="other")).health()
+    assert LLMClient(LLMConfig(base_url=server.url, model="test-model", backend="ollama")).health()["ok"]  # ":latest" implied
+    assert LLMClient(LLMConfig(base_url=server.url, model="TEST-MODEL:LATEST", backend="ollama")).health()["ok"]
+    missing = LLMClient(LLMConfig(base_url=server.url, model="other", backend="ollama")).health()
     assert not missing["ok"] and "not pulled" in missing["detail"]
 
 
 def test_ollama_without_model_is_an_error(ollama_factory):
     server = ollama_factory(["{}"])
-    harness = RecoveryHarness(LLMClient(LLMConfig(base_url=server.url)))
+    harness = RecoveryHarness(LLMClient(LLMConfig(base_url=server.url, model=None, backend="ollama")))
     with pytest.raises(Exception, match="SINGULAROS_LLM_MODEL"):
         harness.propose("context")
 
 
 def test_openai_backend_for_llama_cpp(ollama_factory):
     server = ollama_factory([json.dumps(proposal())])
-    client = LLMClient(LLMConfig(base_url=server.url, backend="openai"))
+    client = LLMClient(LLMConfig(base_url=server.url, model=None, backend="openai"))
     assert client.health()["ok"]
     p = RecoveryHarness(client).propose("context")
     assert p.mode == "INVESTIGATE"
@@ -164,6 +190,61 @@ def test_openai_backend_for_llama_cpp(ollama_factory):
     assert path == "/v1/chat/completions"
     assert body["response_format"]["json_schema"]["schema"] == load_schema()
     assert "model" not in body  # llama-server serves the model it was started with
+
+
+# --------------------------------------------------------------- workers ai
+
+
+def test_workers_ai_request_carries_token_schema_and_thinking_off(ollama_factory):
+    server = ollama_factory([json.dumps(proposal())])
+    p = RecoveryHarness(workers_ai_client(server)).propose("context")
+    assert p.mode == "INVESTIGATE"
+    path, body = server.requests[0]
+    assert path == f"/accounts/{ACCOUNT}/ai/run/{CF_MODEL}"
+    assert server.auth[0] == f"Bearer {TOKEN}"
+    assert body["chat_template_kwargs"] == {"enable_thinking": False}
+    assert body["max_tokens"] == 1024
+    wire = body["response_format"]
+    assert wire["type"] == "json_schema"
+    assert "uniqueItems" not in json.dumps(wire["json_schema"])
+    expected = load_schema()
+    del expected["properties"]["requested_checks"]["uniqueItems"]
+    assert wire["json_schema"] == expected
+
+
+def test_workers_ai_duplicate_checks_are_caught_by_the_python_recheck(ollama_factory):
+    duplicate = proposal(requested_checks=["OBSERVATION_FRESHNESS", "OBSERVATION_FRESHNESS"])
+    server = ollama_factory([json.dumps(duplicate), json.dumps(proposal())])
+    p = RecoveryHarness(workers_ai_client(server)).propose("context")
+    assert p.requested_checks == ["OBSERVATION_FRESHNESS"]
+    assert "unique" in server.requests[1][1]["messages"][-1]["content"]
+
+
+def test_workers_ai_thinking_on_raises_the_token_budget(ollama_factory):
+    server = ollama_factory([json.dumps(proposal())])
+    workers_ai_client(server, think=True).chat([{"role": "user", "content": "x"}])
+    body = server.requests[0][1]
+    assert body["chat_template_kwargs"] == {"enable_thinking": True} and body["max_tokens"] == 8192
+    workers_ai_client(server, think=None).chat([{"role": "user", "content": "x"}])
+    assert "chat_template_kwargs" not in server.requests[1][1]
+
+
+def test_workers_ai_empty_reply_is_an_error(ollama_factory):
+    server = ollama_factory([""])
+    with pytest.raises(LLMError, match="finish_reason length"):
+        workers_ai_client(server).chat([{"role": "user", "content": "x"}])
+
+
+def test_workers_ai_health(ollama_factory):
+    server = ollama_factory(["{}"])
+    assert workers_ai_client(server).health()["ok"]
+    assert server.auth[-1] == f"Bearer {TOKEN}"
+    missing = LLMClient(LLMConfig(base_url=server.url)).health()
+    assert not missing["ok"] and "CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN" in missing["detail"]
+    unknown = LLMClient(LLMConfig(base_url=server.url, model="@cf/none/none", account_id=ACCOUNT, api_token=TOKEN))
+    assert not unknown.health()["ok"]
+    with pytest.raises(LLMError, match="CLOUDFLARE_API_TOKEN"):
+        LLMClient(LLMConfig(base_url=server.url, account_id=ACCOUNT)).chat([{"role": "user", "content": "x"}])
 
 
 # ------------------------------------------------------------------- harness
@@ -262,7 +343,7 @@ def test_review_runs_requested_checks_against_planner_numbers():
 
 
 def test_advisor_turns_server_failure_into_error_record():
-    advisor = RecoveryAdvisor(RecoveryHarness(LLMClient(LLMConfig(base_url="http://127.0.0.1:9", model=MODEL))))
+    advisor = RecoveryAdvisor(RecoveryHarness(LLMClient(LLMConfig(base_url="http://127.0.0.1:9", model=MODEL, backend="ollama"))))
     result = advisor(triage_context())
     assert "error" in result and "proposal" not in result
 
@@ -296,7 +377,7 @@ def test_advice_is_logged_and_never_changes_the_run(ollama_factory, tmp_path):
 
 
 def test_unreachable_advisor_does_not_stop_the_run(tmp_path):
-    advisor = RecoveryAdvisor(RecoveryHarness(LLMClient(LLMConfig(base_url="http://127.0.0.1:9", model=MODEL))))
+    advisor = RecoveryAdvisor(RecoveryHarness(LLMClient(LLMConfig(base_url="http://127.0.0.1:9", model=MODEL, backend="ollama"))))
     summary = run_scenario(load_config(SCENARIOS / "thruster_fault.toml"), tmp_path, advisor)
     assert summary["outcome"] == "DOCKED"
     assert summary["llm_advice"] and all("error" in a for a in summary["llm_advice"])

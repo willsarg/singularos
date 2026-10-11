@@ -1,8 +1,8 @@
 """Constrained-output harness for the LLM recovery agent.
 
 From PR #3 (harness/harness.py, feat/llm-harness), adapted to the
-intelligence.llm client so it runs against Ollama (default) or an
-OpenAI-compatible server such as llama.cpp.
+intelligence.llm client so it runs against Cloudflare Workers AI (default),
+Ollama, or an OpenAI-compatible server such as llama.cpp.
 
 Every request carries the recovery-proposal JSON schema as structured output.
 After parsing, three layers run before a proposal is returned:
