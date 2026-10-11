@@ -94,6 +94,13 @@ export function createRun(data) {
   // around each sample, so the view eases out before large motions.
   const STATION_RADIUS = Math.max(...data.station.flatMap((c) => [...c.min_m, ...c.max_m].map(Math.abs)));
   const extent = s.t.map((_, i) => Math.hypot(s.x[i], s.y[i]));
+  const bounds = { x: [0, 0], y: [0, 0] };
+  const include = (x, y) => {
+    bounds.x[0] = Math.min(bounds.x[0], x); bounds.x[1] = Math.max(bounds.x[1], x);
+    bounds.y[0] = Math.min(bounds.y[0], y); bounds.y[1] = Math.max(bounds.y[1], y);
+  };
+  data.station.forEach((component) => { include(...component.min_m); include(...component.max_m); });
+  s.t.forEach((_, i) => include(s.x[i], s.y[i]));
   const half = Math.round(15 / dt);
   const frame = extent.map((_, i) => {
     let max = 0;
@@ -102,7 +109,7 @@ export function createRun(data) {
   });
 
   return {
-    data, duration, events, phaseStarts,
+    data, duration, events, phaseStarts, bounds,
     description: data.description,
     sample(time) {
       const t = clamp(time, 0, duration);

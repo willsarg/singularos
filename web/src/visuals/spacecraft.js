@@ -4,16 +4,17 @@ import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.j
 
 function plume(length, radius, tint) {
   const mesh = new THREE.Mesh(new THREE.CylinderGeometry(radius, radius * 0.08, length, 32, 12, true), new THREE.ShaderMaterial({
-    uniforms: { time: { value: 0 }, tint: { value: new THREE.Color(tint) } },
+    uniforms: { time: { value: 0 }, tint: { value: new THREE.Color(tint) }, wisps: { value: 0 } },
     vertexShader: `varying vec2 coord; void main() {
       coord = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
     }`,
-    fragmentShader: `uniform float time; uniform vec3 tint; varying vec2 coord;
+    fragmentShader: `uniform float time, wisps; uniform vec3 tint; varying vec2 coord;
       void main() {
         float axial = coord.y;
         float bands = 0.72 + 0.28 * sin(axial * 42.0 - time * 17.0);
         float pulse = 0.9 + 0.1 * sin(time * 41.0 + coord.x * 12.0);
-        float alpha = pow(axial, 0.65) * bands * pulse * 0.55;
+        float strands = pow(0.5 + 0.5 * sin(coord.x * 56.55 + sin(axial * 11.0 - time * 1.4)), 18.0);
+        float alpha = pow(axial, 0.65) * bands * pulse * 0.55 * mix(1.0, strands, wisps);
         gl_FragColor = vec4(tint * (1.3 + axial * 1.7), alpha);
       }`,
     transparent: true, depthWrite: false, side: THREE.DoubleSide, blending: THREE.AdditiveBlending,
@@ -153,15 +154,20 @@ export function createSpacecraft(textures, { wings = true } = {}) {
     fragmentShader: `uniform float time; varying vec3 localPosition, viewNormal, viewPosition;
       void main() {
         float front = smoothstep(-0.18, 0.3, localPosition.z);
-        float rim = pow(1.0 - abs(dot(normalize(viewNormal), normalize(-viewPosition))), 1.5);
+        float rim = pow(1.0 - abs(dot(normalize(viewNormal), normalize(-viewPosition))), 2.4);
         float ripple = 0.8 + 0.2 * sin(localPosition.y * 40.0 - time * 23.0);
-        gl_FragColor = vec4(mix(vec3(3.0, 0.18, 0.02), vec3(3.5, 1.4, 0.25), front), front * rim * ripple * 0.7);
+        gl_FragColor = vec4(mix(vec3(3.0, 0.08, 0.01), vec3(3.5, 0.8, 0.12), front), front * rim * ripple * 0.5);
       }`,
     transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
   }));
-  heat.scale.set(1.05, 1.05, 1.55);
-  heat.position.z = 0.44;
+  heat.scale.set(1.05, 1.05, 1.1);
+  heat.position.z = 0.42;
   craft.add(heat);
+  const plasma = jet([0, 0, 0.92], [0, 0, -1], [[2.0, 0.46, 0xff6224]]);
+  plasma.children[0].material.uniforms.wisps.value = 1;
+  const heatLight = new THREE.PointLight(0xff6426, 0, 2, 2);
+  heatLight.position.z = 0.75;
+  craft.add(plasma, heatLight);
   return {
     craft,
     // thrust: delivered thrust per thruster as a fraction of its maximum.
@@ -175,6 +181,9 @@ export function createSpacecraft(textures, { wings = true } = {}) {
       engineLight.intensity = 2.3 * (thrust.forward ?? 0);
       heat.visible = reentry;
       heat.material.uniforms.time.value = time;
+      plasma.visible = reentry;
+      plasma.children[0].material.uniforms.time.value = time;
+      heatLight.intensity = reentry ? 1.5 : 0;
     },
   };
 }

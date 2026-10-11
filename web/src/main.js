@@ -17,6 +17,7 @@ let request = null;
 let lastLog = '';
 let phaseButtons = [];
 let scenarioRequest = 0;
+let viewMode = params.get('view') === 'overview' ? 'overview' : 'cinematic';
 
 const CAPTIONS = {
   DEPART: 'Leaving the dock for the inspection loop.',
@@ -98,8 +99,24 @@ function updateUI(time) {
 
 function render() {
   if (!playback) return;
-  if (available && !contextLost) scene.render(playback.time);
+  if (available && !contextLost) {
+    const shot = scene.render(playback.time);
+    if (shot) $('shot-title').textContent = shot.title;
+  }
   updateUI(playback.time);
+}
+
+function setViewMode(mode) {
+  viewMode = mode;
+  document.body.dataset.view = mode;
+  document.querySelectorAll('[data-view-mode]').forEach((button) => {
+    button.setAttribute('aria-pressed', String(button.dataset.viewMode === mode));
+  });
+  if (available) scene.setViewMode(mode);
+  const url = new URL(location.href);
+  url.searchParams.set('view', mode);
+  history.replaceState(null, '', url);
+  render();
 }
 
 function schedule() {
@@ -195,6 +212,9 @@ $('speed').addEventListener('change', (event) => {
   playback.resetFrame();
   render();
 });
+document.querySelectorAll('[data-view-mode]').forEach((button) => {
+  button.addEventListener('click', () => setViewMode(button.dataset.viewMode));
+});
 
 window.addEventListener('resize', () => {
   if (available && !contextLost) scene.resize();
@@ -208,7 +228,9 @@ document.addEventListener('visibilitychange', () => {
   } else schedule();
 });
 reduceMotion.addEventListener('change', () => {
+  if (available) scene.setReducedMotion(reduceMotion.matches);
   if (reduceMotion.matches) setPlaying(false);
+  render();
 });
 
 function showFallback(message) {
@@ -249,6 +271,7 @@ $('scene').addEventListener('webglcontextrestored', () => {
 
 try {
   scene = createScene($('scene'), {
+    reducedMotion: reduceMotion.matches,
     invalidate: () => { if (available && !contextLost) render(); },
     onTextureError: () => {
       $('render-status').textContent = 'Some planet textures could not load. The replay remains available; reload to retry.';
@@ -260,6 +283,7 @@ try {
   console.warn('3D scene unavailable:', error.message);
   showFallback('The 3D view is unavailable on this device. You can still play the run and read the telemetry.');
 }
+setViewMode(viewMode);
 
 (async () => {
   const response = await fetch(`${runsUrl}index.json`);

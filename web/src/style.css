@@ -98,6 +98,21 @@ h1 em { font-style: normal; color: var(--cyan); }
 .run-controls label { color: var(--muted); }
 .run-controls select { background: #0a1a25; color: var(--paper); border: 1px solid var(--line); padding: 4px 6px; font-size: 10px; margin-right: 10px; }
 .run-controls select:focus-visible { outline: 2px solid var(--cyan); outline-offset: 2px; }
+.view-switch { display: flex; gap: 3px; border: 1px solid var(--line); padding: 4px; background: rgba(2,8,13,0.65); }
+.view-switch button { border: 0; background: transparent; color: var(--muted); font-size: 10px; letter-spacing: 0.07em; padding: 8px 12px; }
+.view-switch button[aria-pressed="true"] { color: var(--paper); background: rgba(134,238,225,0.12); box-shadow: inset 0 -1px var(--cyan); }
+.mission-console { padding: 15px 18px; border: 1px solid var(--line); background: linear-gradient(180deg, rgba(3,10,16,0.78), rgba(3,10,16,0.94)); backdrop-filter: blur(16px); }
+.telemetry { max-height: calc(100svh - 330px); overflow-y: auto; scrollbar-width: thin; }
+.scene-caption { bottom: 245px; }
+.shot-heading { display: flex; align-items: center; gap: 12px; margin-top: 25px; color: var(--paper); font-family: var(--display); font-size: 25px; letter-spacing: 0.03em; }
+.shot-rule { width: 25px; height: 2px; background: var(--cyan); box-shadow: 0 0 12px rgba(134,238,225,0.25); }
+body[data-view="cinematic"] .intro { top: 122px; max-width: 240px; }
+body[data-view="cinematic"] h1 { font-size: 56px; line-height: 0.95; }
+body[data-view="cinematic"] .eyebrow { font-size: 7px; letter-spacing: 0.1em; margin-bottom: 17px; }
+body[data-view="cinematic"] .description { font-size: 11px; line-height: 1.65; color: #a1b4bd; text-shadow: 0 1px 5px #020409; }
+body[data-view="cinematic"] .vignette { background: linear-gradient(180deg, rgba(2,4,9,0.45), transparent 24%, transparent 68%, rgba(2,4,9,0.9)), linear-gradient(90deg, rgba(2,4,9,0.6), transparent 26%, transparent 77%, rgba(2,4,9,0.2)); }
+body[data-view="cinematic"] .telemetry { background: linear-gradient(135deg, rgba(9,24,35,0.9), rgba(6,16,25,0.86)); }
+body[data-view="overview"] .shot-heading { display: none; }
 
 @media (min-width: 1600px) { .telemetry { width: 285px; } }
 @media (max-width: 1050px) and (min-width: 760px) {
@@ -107,6 +122,17 @@ h1 em { font-style: normal; color: var(--cyan); }
   .description { font-size: 11px; }
 }
 @media (max-width: 759px) {
+  .mission-console { padding: 10px 12px; left: 12px; right: 12px; }
+  .telemetry { max-height: none; }
+  .view-switch { padding: 3px; }
+  .view-switch button { font-size: 8px; padding: 8px; }
+  body[data-view="cinematic"] .intro { top: 91px; max-width: none; right: 22px; }
+  body[data-view="cinematic"] h1 { font-size: 32px; }
+  body[data-view="cinematic"] h1 br { display: none; }
+  body[data-view="cinematic"] .eyebrow { font-size: 6px; margin-bottom: 8px; }
+  body[data-view="cinematic"] .description { display: none; }
+  .shot-heading { font-size: 19px; margin-top: 12px; }
+  .shot-rule { width: 18px; }
   .vignette { background: linear-gradient(180deg, rgba(2,4,9,0.2), transparent 25%, transparent 62%, rgba(5,13,23,0.96)), linear-gradient(90deg, rgba(2,4,9,0.2), transparent 45%); }
   .masthead { margin: 0 22px; height: 70px; gap: 12px; }
   .wordmark { font-size: 21px; }

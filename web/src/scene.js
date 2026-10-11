@@ -7,6 +7,7 @@ import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.j
 import { canvasTexture, randomGenerator, surfaceTextures } from './visuals/textures.js';
 import { createEarth } from './visuals/earth.js';
 import { createSpacecraft } from './visuals/spacecraft.js';
+import { cameraPose } from './visuals/cinematography.js';
 
 // Units are metres in the station frame of the simulator. Scene axes: +X is
 // along-track (sim +y), +Y is radial, away from Earth (sim +x), +Z is the
@@ -18,7 +19,6 @@ const toScene = (x, y) => v(y, x, 0);
 // Earth is drawn in its own pass, shrunk about the camera by EARTH_SCALE:
 // apparent size and direction are exact, depth stays in range.
 const EARTH_SCALE = 1e-3;
-const VIEW_DIRECTION = v(0.18, 0.34, 1).normalize();
 
 function buildStation(components, textures) {
   const station = new THREE.Group();
@@ -49,6 +49,15 @@ function buildStation(components, textures) {
         bands.add(band);
       }
       mesh.add(bands);
+      const bolts = new THREE.InstancedMesh(new THREE.SphereGeometry(0.045, 8, 6), materials.silver, 36);
+      const fastener = new THREE.Object3D();
+      for (let i = 0; i < 36; i++) {
+        const angle = (i % 12) / 12 * Math.PI * 2;
+        fastener.position.set(Math.sin(angle) * (width / 2 + 0.015), -height / 2 + height * (Math.floor(i / 12) + 1) / 4, Math.cos(angle) * (width / 2 + 0.015));
+        fastener.updateMatrix();
+        bolts.setMatrixAt(i, fastener.matrix);
+      }
+      mesh.add(bolts);
     } else if (c.type === 'docking_port') {
       mesh = new THREE.Mesh(new THREE.CylinderGeometry(width / 2, width / 2, height, 48), materials.foil);
       const ring = new THREE.Mesh(new THREE.TorusGeometry(width / 2, 0.05, 8, 48), materials.port);
@@ -63,8 +72,21 @@ function buildStation(components, textures) {
         edge.position.y = dy;
         mesh.add(edge);
       }
+      for (const dx of [-width / 2, width / 2]) {
+        const edge = new THREE.Mesh(new THREE.BoxGeometry(0.08, height, 0.16), materials.silver);
+        edge.position.x = dx;
+        mesh.add(edge);
+      }
     } else if (c.type === 'radiator') {
       mesh = new THREE.Mesh(new RoundedBoxGeometry(width, height, 0.2, 2, 0.06), materials.radiator);
+      const seams = new THREE.InstancedMesh(new THREE.BoxGeometry(0.025, height * 0.9, 0.015), materials.silver, 24);
+      const seam = new THREE.Object3D();
+      for (let i = 0; i < 24; i++) {
+        seam.position.set(-width / 2 + width * (i + 0.5) / 24, 0, 0.11);
+        seam.updateMatrix();
+        seams.setMatrixAt(i, seam.matrix);
+      }
+      mesh.add(seams);
     } else {
       mesh = new THREE.Mesh(new RoundedBoxGeometry(width, height, Math.min(width, height), 2, 0.08), materials.foil);
     }
@@ -90,11 +112,11 @@ function ringSet(color, opacity) {
   return group;
 }
 
-export function createScene(canvas, { invalidate = () => {}, onTextureError = () => {} } = {}) {
+export function createScene(canvas, { invalidate = () => {}, onTextureError = () => {}, reducedMotion = false } = {}) {
   const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true, powerPreference: 'high-performance' });
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 1.05;
+  renderer.toneMappingExposure = 1.12;
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFShadowMap;
   renderer.autoClear = false;
@@ -140,7 +162,7 @@ export function createScene(canvas, { invalidate = () => {}, onTextureError = ()
   // Foreground pass: station, vehicle, tracks.
   const scene = new THREE.Scene();
   const camera = new THREE.PerspectiveCamera(37, 1, 0.1, 1e6);
-  scene.add(new THREE.AmbientLight(0x6a8bb5, 0.16));
+  scene.add(new THREE.AmbientLight(0x6a8bb5, 0.13));
   const sun = new THREE.DirectionalLight(0xfff2dc, 3.1);
   sun.castShadow = true;
   sun.shadow.mapSize.set(2048, 2048);
@@ -149,7 +171,9 @@ export function createScene(canvas, { invalidate = () => {}, onTextureError = ()
   scene.add(sun, sun.target);
   const earthshine = new THREE.DirectionalLight(0x789bcf, 0.6);
   earthshine.position.set(0, -1, 0.2);
-  scene.add(earthshine);
+  scene.add(earthshine, earthshine.target);
+  const rim = new THREE.DirectionalLight(0x75b9e9, 1.2);
+  scene.add(rim, rim.target);
 
   const reflection = canvasTexture(512, 256, (ctx, width, height) => {
     const gradient = ctx.createLinearGradient(0, 0, 0, height);
@@ -196,7 +220,22 @@ export function createScene(canvas, { invalidate = () => {}, onTextureError = ()
   let station = null;
   let run = null;
   let flown = null;
-  const estimate = new THREE.Mesh(new THREE.OctahedronGeometry(1), new THREE.MeshBasicMaterial({ color: AMBER, wireframe: true }));
+  let viewMode = 'cinematic';
+  const impactGeometry = new THREE.BufferGeometry();
+  const impactPositions = new Float32Array(96 * 3);
+  impactGeometry.setAttribute('position', new THREE.BufferAttribute(impactPositions, 3));
+  const impactRandom = randomGenerator(114);
+  const debris = Array.from({ length: 96 }, () => ({
+    angle: impactRandom() * Math.PI * 2, speed: 0.2 + impactRandom() * 0.5,
+    depth: impactRandom() * 0.8 - 0.4,
+  }));
+  const impact = new THREE.Points(impactGeometry, new THREE.PointsMaterial({
+    color: 0xffd7a4, size: 0.018, map: starSprite, transparent: true,
+    depthWrite: false, blending: THREE.AdditiveBlending,
+  }));
+  impact.frustumCulled = false;
+  scene.add(impact);
+  const estimate = new THREE.Mesh(new THREE.OctahedronGeometry(1), new THREE.MeshBasicMaterial({ color: AMBER, wireframe: true, transparent: true }));
   const estimateRings = ringSet(AMBER, 0.55);
   const dock = ringSet(CYAN, 0.35);
   scene.add(estimate, estimateRings, dock);
@@ -210,7 +249,9 @@ export function createScene(canvas, { invalidate = () => {}, onTextureError = ()
   const projected = v(0, 0, 0);
   const placeLabel = (element, position, cam, visible = true, offsetY = 0) => {
     if (!element) return;
-    projected.copy(position).project(cam);
+    projected.copy(position);
+    if (cam === camera) projected.add(scene.position);
+    projected.project(cam);
     const x = (projected.x + 1) * viewWidth / 2;
     const y = (1 - projected.y) * viewHeight / 2 + offsetY;
     const onScreen = projected.z > -1 && projected.z < 1 && x > 20 && x < viewWidth - 140 && y > 80 && y < viewHeight - 200;
@@ -221,7 +262,16 @@ export function createScene(canvas, { invalidate = () => {}, onTextureError = ()
   function setRun(next) {
     run = next;
     const { data } = run;
-    if (station) scene.remove(station);
+    if (station) {
+      scene.remove(station);
+      const geometries = new Set(), materials = new Set();
+      station.traverse((part) => {
+        if (part.isMesh) { geometries.add(part.geometry); materials.add(part.material); }
+        if (part.isInstancedMesh) part.dispose();
+      });
+      geometries.forEach((geometry) => geometry.dispose());
+      materials.forEach((material) => material.dispose());
+    }
     station = buildStation(data.station, textures);
     scene.add(station);
     // The wingless model spans about 2 units; match the sim's vehicle disc.
@@ -242,7 +292,7 @@ export function createScene(canvas, { invalidate = () => {}, onTextureError = ()
     }
     earthCentre = v(0, -data.orbit.station_radius_m, 0);
 
-    if (flown) { scene.remove(flown); flown.geometry.dispose(); }
+    if (flown) { scene.remove(flown); flown.geometry.dispose(); flown.material.dispose(); }
     const s = data.samples;
     const positions = new Float32Array(s.t.length * 3);
     s.t.forEach((_, i) => {
@@ -274,6 +324,10 @@ export function createScene(canvas, { invalidate = () => {}, onTextureError = ()
       composer.setSize(viewWidth, viewHeight);
       bloom.strength = narrow ? 0.22 : 0.32;
     }
+    sun.shadow.mapSize.set(narrow ? 1024 : 2048, narrow ? 1024 : 2048);
+    if (sun.shadow.map && sun.shadow.map.width !== sun.shadow.mapSize.x) {
+      sun.shadow.map.dispose(); sun.shadow.map = null;
+    }
   }
 
   const nose = v(0, 0, 0), left = v(0, 0, 0), up = v(0, 0, 0), basis = new THREE.Matrix4();
@@ -289,7 +343,7 @@ export function createScene(canvas, { invalidate = () => {}, onTextureError = ()
     left.copy(toScene(-s, c));
     up.crossVectors(nose, left);
     craft.quaternion.setFromRotationMatrix(basis.makeBasis(left, up, nose));
-    vehicle.update(time, state.thrust, false);
+    vehicle.update(time, state.thrust, state.alt < 160);
     flown.geometry.setDrawRange(0, run.sampleIndex(time) + 1);
 
     estimate.visible = estimateRings.visible = state.nav !== null;
@@ -301,31 +355,63 @@ export function createScene(canvas, { invalidate = () => {}, onTextureError = ()
       estimate.rotation.set(time * 0.4, time * 0.6, 0);
     }
 
-    // Frame the station and the vehicle; the radius comes from a window
-    // around this time, so the view widens before the vehicle gets there.
-    const radius = Math.max(narrow ? 30 : 24, state.frame * 1.1);
-    const target = position.clone().multiplyScalar(0.5);
-    if (!narrow) target.x -= radius * 0.18; // leave room for the telemetry panel
-    const distance = radius / Math.sin(THREE.MathUtils.degToRad(camera.fov / 2));
-    camera.position.copy(target).addScaledVector(VIEW_DIRECTION, distance);
-    camera.near = Math.max(0.05, distance * 0.002);
-    camera.far = distance * 50;
+    const shot = cameraPose(run, state, { mode: viewMode, aspect: viewWidth / viewHeight, reducedMotion });
+    const targetWorld = v(...shot.target);
+    const worldCamera = v(...shot.position);
+    const distance = worldCamera.distanceTo(targetWorld);
+    // Keep close-up geometry near the GPU origin even hundreds of kilometres
+    // from the station. Exported positions and the Earth pass remain unchanged.
+    scene.position.copy(position).negate();
+    camera.position.copy(worldCamera).sub(position);
+    const target = targetWorld.clone().sub(position);
+    camera.fov = shot.fov;
+    camera.near = Math.max(0.02, distance * 0.001);
+    camera.far = Math.max(500, distance * 50);
+    camera.setViewOffset(viewWidth, viewHeight, narrow ? 0 : viewWidth * 0.07, narrow ? viewHeight * 0.08 : viewHeight * 0.025, viewWidth, viewHeight);
     camera.updateProjectionMatrix();
     camera.lookAt(target);
+    backgroundCamera.fov = camera.fov;
+    backgroundCamera.copy(camera);
+    backgroundCamera.near = 1;
+    backgroundCamera.far = 4e4;
+    backgroundCamera.updateProjectionMatrix();
+    flown.material.opacity = viewMode === 'overview' ? 0.75 : 0.75 * (1 - shot.detail) ** 2;
+    estimate.material.opacity = 0.55 * (1 - shot.detail * 0.8);
+    estimateRings.children.forEach((ring) => { ring.material.opacity = 0.55 * (1 - shot.detail * 0.8); });
+    dock.children.forEach((ring) => { ring.material.opacity = 0.35 * (1 - shot.detail * 0.85); });
+
+    const hit = run.data.events.find((event) => event.type === 'impact' && time >= event.t && time < event.t + 8);
+    impact.visible = Boolean(hit) && !reducedMotion;
+    if (hit) {
+      const origin = run.sample(hit.t);
+      const age = (time - hit.t) / 8;
+      impact.position.copy(toScene(origin.x, origin.y));
+      impact.material.opacity = (1 - age) ** 2;
+      debris.forEach((particle, i) => {
+        const travel = age * particle.speed * run.data.vehicle_radius_m * 6;
+        impactPositions[i * 3] = Math.cos(particle.angle) * travel;
+        impactPositions[i * 3 + 1] = Math.sin(particle.angle) * travel;
+        impactPositions[i * 3 + 2] = particle.depth * travel;
+      });
+      impactGeometry.attributes.position.needsUpdate = true;
+    }
 
     // The Earth turns under the station once per orbit: the frame co-rotates.
     const n = 2 * Math.PI / run.data.orbit.period_s;
     earthPivot.rotation.z = -n * time;
     backgroundCamera.quaternion.copy(camera.quaternion);
     backgroundCamera.position.set(0, 0, 0);
-    earthPivot.position.copy(earthCentre).sub(camera.position).multiplyScalar(EARTH_SCALE);
+    earthPivot.position.copy(earthCentre).sub(worldCamera).multiplyScalar(EARTH_SCALE);
 
+    const radius = viewMode === 'overview' ? Math.max(24, distance * Math.sin(shot.fov * Math.PI / 360)) : Math.max(5, distance * 0.7);
     const shadowsOn = radius < 200;
     sun.castShadow = shadowsOn;
-    sun.target.position.copy(target);
-    sun.position.copy(target).addScaledVector(sunDirection, radius * 4);
+    sun.target.position.copy(targetWorld);
+    sun.position.copy(targetWorld).addScaledVector(sunDirection, radius * 4);
     Object.assign(sun.shadow.camera, { left: -radius, right: radius, top: radius, bottom: -radius, near: radius, far: radius * 8 });
     sun.shadow.camera.updateProjectionMatrix();
+    rim.target.position.copy(position);
+    rim.position.copy(position).add(v(-5, 2, -4));
 
     if (composer) composer.render();
     else {
@@ -335,11 +421,11 @@ export function createScene(canvas, { invalidate = () => {}, onTextureError = ()
       renderer.render(scene, camera);
     }
     const tiny = radius > 400;
-    placeLabel(labels.craft, position, camera, !narrow, 28);
+    placeLabel(labels.craft, position, camera, !narrow && shot.detail < 0.4, 28);
     placeLabel(labels.station, toScene(-7, 0), camera, !narrow && tiny, 0);
     // Earth label on the horizon ahead of the camera.
     const re = run.data.orbit.earth_radius_m;
-    const radial = camera.position.clone().sub(earthCentre);
+    const radial = worldCamera.clone().sub(earthCentre);
     const r = radial.length();
     radial.divideScalar(r);
     // Swung left of centre so the label clears the station.
@@ -347,9 +433,14 @@ export function createScene(canvas, { invalidate = () => {}, onTextureError = ()
     const dip = Math.acos(Math.min(1, re / r));
     const horizon = ahead.multiplyScalar(Math.cos(dip)).addScaledVector(radial, -Math.sin(dip))
       .multiplyScalar(Math.sqrt(Math.max(0, r * r - re * re)) * EARTH_SCALE);
-    placeLabel(labels.earth, horizon, backgroundCamera, true, 12);
+    placeLabel(labels.earth, horizon, backgroundCamera, viewMode === 'overview', 12);
+    return shot;
   }
 
   resize();
-  return { render, resize, setRun, restore: restoreEnvironment };
+  return {
+    render, resize, setRun, restore: restoreEnvironment,
+    setViewMode(mode) { viewMode = mode === 'overview' ? 'overview' : 'cinematic'; },
+    setReducedMotion(value) { reducedMotion = value; },
+  };
 }

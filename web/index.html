@@ -11,7 +11,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&family=Big+Shoulders+Display:wght@500;700;900&display=swap" rel="stylesheet">
 </head>
-<body>
+<body data-view="cinematic">
   <div class="viewport" id="viewport">
     <canvas id="scene" aria-hidden="true"></canvas>
     <div class="vignette" aria-hidden="true"></div>
@@ -23,14 +23,18 @@
   <header class="masthead">
     <a class="wordmark" href="./" aria-label="SingularOS home"><span class="brand-icon" aria-hidden="true">✳</span> SINGULAR<span>OS</span></a>
     <div class="mission-tag"><span class="status-dot"></span> <span id="scenario-name">LOADING</span> <span class="separator">/</span> <span id="scenario-faults"></span></div>
-    <span class="simulation-tag">SIMULATOR REPLAY</span>
+    <div class="view-switch" role="group" aria-label="Camera view">
+      <button type="button" data-view-mode="cinematic" aria-pressed="true">Cinematic</button>
+      <button type="button" data-view-mode="overview" aria-pressed="false">Overview</button>
+    </div>
   </header>
 
   <main>
     <section class="intro" aria-labelledby="heading">
       <p class="eyebrow"><span></span> AUTONOMOUS FAULT RECOVERY</p>
-      <h1 id="heading">Find a<br>way <em>home.</em></h1>
+      <h1 id="heading">Find a <br>way <em>home.</em></h1>
       <p class="description" id="description">An inspection craft works around its station. When something breaks, it has to work out what and get back on its own.</p>
+      <div class="shot-heading"><span class="shot-rule"></span><span id="shot-title">Leaving the station</span></div>
     </section>
 
     <aside class="telemetry" aria-label="Mission telemetry">
